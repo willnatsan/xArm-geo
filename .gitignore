@@ -1,0 +1,17 @@
+.vscode/
+.idea/
+.venv/
+.cache/
+*build*/
+
+# Ignore generated MJCF XML & URDF Files (Contains Absolute Paths)
+assets/urdf/*.urdf
+assets/mjcf/*.xml
+
+# Keep Scene & Extension MJCF XML Files
+!assets/mjcf/*_scene.xml
+!assets/mjcf/*_extension.xml
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml

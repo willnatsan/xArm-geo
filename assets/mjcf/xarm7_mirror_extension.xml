@@ -1,0 +1,17 @@
+<mujoco model="xArm7 Mirror Extensions">
+    <option integrator="implicitfast"/>
+
+    <actuator>
+        <position joint="joint1" kp="1500" kv="150" forcerange="-50 50" ctrlrange="-6.28319 6.28319"/>
+        <position joint="joint2" kp="1500" kv="150" forcerange="-50 50" ctrlrange="-2.0944 2.059"/>
+        <position joint="joint3" kp="1000" kv="100" forcerange="-30 30" ctrlrange="-6.28319 6.28319"/>
+        <position joint="joint4" kp="1000" kv="100" forcerange="-30 30" ctrlrange="-3.927 0.19198"/>
+        <position joint="joint5" kp="1000" kv="100" forcerange="-30 30" ctrlrange="-6.28319 6.28319"/>
+        <position joint="joint6" kp="800" kv="80" forcerange="-20 20" ctrlrange="-3.14159 1.69297"/>
+        <position joint="joint7" kp="800" kv="80" forcerange="-20 20" ctrlrange="-6.28319 6.28319"/>
+    </actuator>
+
+    <keyframe>
+        <key name="home" qpos="0 0.247 0 -0.909 0 -1.5644 0" ctrl="0 0.247 0 -0.909 0 -1.5644 0"/>
+    </keyframe>
+</mujoco>

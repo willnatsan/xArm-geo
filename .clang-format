@@ -1,0 +1,30 @@
+---
+# Start with a solid base
+BasedOnStyle: LLVM
+
+# --- TABS & INDENTATION ---
+# UseTab: Always will use tabs for everything.
+# UseTab: ForIndentation uses tabs to indent and spaces to align (recommended).
+# UseTab: Never will use spaces for everything.
+UseTab: Never
+IndentWidth: 4
+TabWidth: 4
+ContinuationIndentWidth: 4
+
+# --- NAMESPACES ---
+# 'None' (default) keeps code at column 0.
+# 'All' indents everything inside a namespace.
+NamespaceIndentation: All
+
+# --- CLEANUP & MODERN LOOK ---
+ColumnLimit: 100
+AccessModifierOffset: -4 # Aligns 'public:' with the class keyword
+PackConstructorInitializers: BinPack
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortBlocksOnASingleLine: Always
+AllowShortFunctionsOnASingleLine: All
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: true
+SpacesBeforeTrailingComments: 2
+FixNamespaceComments: true # Adds // namespace name at the end of the closing brace
+---

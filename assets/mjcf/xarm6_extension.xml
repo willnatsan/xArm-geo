@@ -1,0 +1,16 @@
+<mujoco model="xArm6 Extensions">
+    <option integrator="implicitfast"/>
+
+    <actuator>
+        <position joint="joint1" kp="0" kv="0" forcerange="-50 50" ctrlrange="-6.28319 6.28319"/>
+        <position joint="joint2" kp="0" kv="0" forcerange="-50 50" ctrlrange="-2.059 2.0944"/>
+        <position joint="joint3" kp="0" kv="0" forcerange="-32 32" ctrlrange="-3.927 0.19198"/>
+        <position joint="joint4" kp="0" kv="0" forcerange="-32 32" ctrlrange="-6.28319 6.28319"/>
+        <position joint="joint5" kp="0" kv="0" forcerange="-32 32" ctrlrange="-1.69297 3.14159"/>
+        <position joint="joint6" kp="0" kv="0" forcerange="-20 20" ctrlrange="-6.28319 6.28319"/>
+    </actuator>
+
+    <keyframe>
+        <key name="home" qpos="0 0 0 0 0 0" ctrl="0 0 0 0 0 0"/>
+    </keyframe>
+</mujoco>

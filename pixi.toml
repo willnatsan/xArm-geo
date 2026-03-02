@@ -1,0 +1,104 @@
+[workspace]
+name = "xArm_geo"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[activation.env]
+CMAKE_INSTALL_MODE = "SYMLINK"
+CMAKE_INSTALL_PREFIX = "$CONDA_PREFIX"
+LD_LIBRARY_PATH = "$CONDA_PREFIX/lib"
+ASAN_OPTIONS = "symbolize=1:print_stacktrace=1"
+ASAN_SYMBOLIZER_PATH = "$CONDA_PREFIX/bin/llvm-symbolizer"
+
+[dependencies]
+# --- Build Dependencies ---
+cmake = ">=4.2.3,<5"
+clangxx = ">=21.1.8,<22"
+ninja = ">=1.13.2,<2"
+mold = ">=2.40.4,<3"
+sccache = ">=0.14.0,<0.15"
+pkg-config = ">=0.29.2,<0.30"
+
+# --- Core Dependencies ---
+eigen = ">=3.4.0,<4"
+manif = ">=0.0.5,<0.0.6"
+yaml-cpp = ">=0.8.0,<0.9"
+simde = ">=0.8.2,<0.9"
+proxsuite = ">=0.7.2,<0.8"
+coal = ">=3.0.2,<4"
+tinyxml2 = ">=11.0.0,<12"
+
+# --- Optional / Interfaces ---
+mujoco = ">=3.3.7,<4"
+glfw = ">=3.4,<4"
+libgl-devel = ">=1.7.0,<2"
+
+# --- Python & Bindings ---
+python = ">=3.13.12,<3.14"
+nanobind = ">=2.10.2,<3"
+pip = ">=26.0.1,<27"
+
+[pypi-dependencies]
+xacrodoc = ">=1.3.1, <2"
+
+[tasks]
+configure = { cmd = [
+  "cmake",
+  "-GNinja",
+  "-DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX",
+  "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+  "-DCMAKE_BUILD_TYPE={{ build_type }}",
+  # Use clang as the compiler
+  "-DCMAKE_C_COMPILER=clang",
+  "-DCMAKE_CXX_COMPILER=clang++",
+  # Use mold as the linker
+  "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold",
+  "-DCMAKE_MODULE_LINKER_FLAGS=-fuse-ld=mold",
+  "-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=mold",
+  # Use sccache to speed up compilation
+  "-DCMAKE_C_COMPILER_LAUNCHER=sccache",
+  "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache",
+  # Activate color output with Ninja
+  "-DCMAKE_COLOR_DIAGNOSTICS=ON",
+  # Inject extra flags (like sanitizers) if provided
+  "{{ extra_flags }}",
+  "-S", ".",
+  "-B", "build"
+], args = [
+  { arg = "build_type", default = "Debug" }, # Defaults to Building in Debug mode
+  { arg = "extra_flags", default = "-Wno-dev" }
+] }
+
+build = { cmd = [
+  "cmake",
+  "--build",
+  "build"
+], depends-on = ["configure"] }
+
+# Memory Debugging Build (Address Sanitizer)
+build_asan = { depends-on = [
+  { task = "configure", args = [
+    "RelWithDebInfo",
+    "-fsanitize=address"
+  ] },
+  "build"
+] }
+
+clean = "cmake -E rm -rf build"
+
+debug = { cmd = "./build/debug", depends-on = ["build"] }
+basic = { cmd = "./build/basic_test", depends-on = ["build"] }
+mujoco = { cmd = "./build/mujoco_test", depends-on = ["build"] }
+
+# --- Separate Environment for Code Quality ---
+[feature.lint.dependencies]
+pre-commit = ">=4.5.1,<5"
+
+[feature.lint.tasks]
+lint = "pre-commit run --all-files"
+
+[environments]
+# Creates an isolated 'lint' environment
+lint = { features = ["lint"], no-default-feature = true }
+

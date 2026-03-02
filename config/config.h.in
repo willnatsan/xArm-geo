@@ -1,0 +1,8 @@
+#pragma once
+#include <string>
+
+const std::string XARM_DESCRIPTION_PATH = "@XARM_DESCRIPTION_PATH@";
+const std::string KINEMATIC_PARAMS_PATH = XARM_DESCRIPTION_PATH + "/config/kinematics/default/";
+const std::string INERTIAL_PARAMS_PATH = XARM_DESCRIPTION_PATH + "/config/link_inertial/";
+const std::string URDF_PATH = XARM_DESCRIPTION_PATH + "/urdf/_compiled/";
+const std::string MJCF_PATH = XARM_DESCRIPTION_PATH + "/mjcf/";

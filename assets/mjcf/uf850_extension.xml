@@ -1,0 +1,16 @@
+<mujoco model="UF850 Extensions">
+    <option integrator="implicitfast"/>
+
+    <actuator>
+        <position joint="joint1" kp="0" kv="0" forcerange="-200 200" ctrlrange="-6.28319 6.28319"/>
+        <position joint="joint2" kp="0" kv="0" forcerange="-200 200" ctrlrange="-2.30383 2.30383"/>
+        <position joint="joint3" kp="0" kv="0" forcerange="-90 90" ctrlrange="-4.2237 0.061087"/>
+        <position joint="joint4" kp="0" kv="0" forcerange="-68 68" ctrlrange="-6.28319 6.28319"/>
+        <position joint="joint5" kp="0" kv="0" forcerange="-19 19" ctrlrange="-2.1642 2.1642"/>
+        <position joint="joint6" kp="0" kv="0" forcerange="-19 19" ctrlrange="-6.28319 6.28319"/>
+    </actuator>
+
+    <keyframe>
+        <key name="home" qpos="0 0 0 0 0 0" ctrl="0 0 0 0 0 0"/>
+    </keyframe>
+</mujoco>

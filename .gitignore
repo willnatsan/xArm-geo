@@ -5,7 +5,7 @@
 *build*/
 
 # Ignore generated MJCF XML & URDF Files (Contains Absolute Paths)
-assets/urdf/*.urdf
+assets/urdf/_compiled/*.urdf
 assets/mjcf/*.xml
 
 # Keep Scene & Extension MJCF XML Files

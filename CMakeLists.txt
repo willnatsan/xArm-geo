@@ -2,21 +2,28 @@ cmake_minimum_required(VERSION 3.25)
 project(xArm_geo)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Toggle these to enable/disable specific backends
 option(BUILD_WITH_MUJOCO "Build with MuJoCo simulation support" ON)
 option(BUILD_WITH_REAL_XARM "Build with physical xArm SDK support" ON)
-option(BUILD_PYTHON_BINDINGS "Build Pybind11 bindings" ON)
+option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 
 # --- Core Dependencies ---
+include(FetchContent)
 
 find_package(Threads REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 
-find_package(manif REQUIRED)
+FetchContent_Declare(
+  smooth
+  GIT_REPOSITORY https://github.com/pettni/smooth.git
+  GIT_TAG v1.1.0
+)
+FetchContent_MakeAvailable(smooth)
+
 find_package(yaml-cpp REQUIRED)
 find_package(proxsuite REQUIRED)
 find_package(coal REQUIRED)
@@ -25,7 +32,13 @@ find_package(tinyxml2 REQUIRED)
 # --- Optional Dependencies ---
 
 if(BUILD_PYTHON_BINDINGS)
-    find_package(pybind11 REQUIRED)
+  message(STATUS "xArm_geo: Enabling Python Bindings (nanobind)")
+  execute_process(
+      COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+      OUTPUT_VARIABLE nanobind_DIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  find_package(nanobind CONFIG REQUIRED PATHS "${nanobind_DIR}" NO_DEFAULT_PATH)
 endif()
 
 if(BUILD_WITH_MUJOCO)
@@ -39,7 +52,6 @@ endif()
 # Using FetchContent, as it is not packaged on conda-forge.
 if(BUILD_WITH_REAL_XARM)
     message(STATUS "xArm_geo: Enabling Real xArm Backend")
-    include(FetchContent)
     FetchContent_Declare(
             xarm_sdk
             GIT_REPOSITORY https://github.com/xArm-Developer/xArm-CPLUS-SDK.git
@@ -58,7 +70,7 @@ if(BUILD_WITH_REAL_XARM)
     endforeach()
 
     add_library(xarm STATIC ${XARM_SDK_SOURCES})
-    target_include_directories(xarm PRIVATE "${xarm_sdk_SOURCE_DIR}/include")
+    target_include_directories(xarm PUBLIC "${xarm_sdk_SOURCE_DIR}/include")
     target_compile_options(xarm PRIVATE -w) # Suppressing Warnings from xArm SDK
     target_link_libraries(xarm PRIVATE Threads::Threads)
     add_compile_definitions(XARM_GEO_HAS_REAL_XARM)
@@ -69,7 +81,7 @@ endif()
 set(XARM_DESCRIPTION_PATH "${PROJECT_SOURCE_DIR}/assets")
 configure_file(
         ${PROJECT_SOURCE_DIR}/config/config.h.in
-        ${PROJECT_BINARY_DIR}/config.h
+        ${PROJECT_BINARY_DIR}/xarm_geo_config.h
 )
 
 set(ASSETS_DIR ${CMAKE_SOURCE_DIR}/assets)
@@ -80,12 +92,12 @@ set(GENERATOR_TARGET_NAME "gen_description_files")
 set(XACRO_SOURCE_FILE ${URDF_DIR}/xarm_device.urdf.xacro)
 
 set(GENERATED_FILES
-        ${URDF_DIR}/xarm5.urdf
-        ${URDF_DIR}/xarm6.urdf
-        ${URDF_DIR}/xarm7.urdf
-        ${URDF_DIR}/lite6.urdf
-        ${URDF_DIR}/uf850.urdf
-        ${URDF_DIR}/xarm7_mirror.urdf
+        ${URDF_DIR}/_compiled/xarm5.urdf
+        ${URDF_DIR}/_compiled/xarm6.urdf
+        ${URDF_DIR}/_compiled/xarm7.urdf
+        ${URDF_DIR}/_compiled/lite6.urdf
+        ${URDF_DIR}/_compiled/uf850.urdf
+        ${URDF_DIR}/_compiled/xarm7_mirror.urdf
         ${MJCF_DIR}/xarm5.xml
         ${MJCF_DIR}/xarm6.xml
         ${MJCF_DIR}/xarm7.xml
@@ -96,7 +108,7 @@ set(GENERATED_FILES
 
 add_custom_command(
         OUTPUT ${GENERATED_FILES}
-        COMMAND ${Python3_EXECUTABLE} ${GENERATOR_SCRIPT}
+        COMMAND ${Python_EXECUTABLE} ${GENERATOR_SCRIPT}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         DEPENDS ${GENERATOR_SCRIPT} ${XACRO_SOURCE_FILE}
         COMMENT "Generating Description Files"
@@ -107,6 +119,8 @@ add_custom_target(${GENERATOR_TARGET_NAME} ALL DEPENDS ${GENERATED_FILES})
 
 set(LIB_SOURCES
         src/xarm_geo.cpp
+        src/utils/data_builder.cpp
+        src/utils/data_config.cpp
 )
 
 if(BUILD_WITH_MUJOCO)
@@ -133,8 +147,8 @@ target_include_directories(
 # Core Links
 target_link_libraries(
         ${PROJECT_NAME}
-        PUBLIC Eigen3::Eigen manif proxsuite coal
-        PRIVATE yaml-cpp tinyxml2::tinyxml2
+        PUBLIC Eigen3::Eigen smooth proxsuite::proxsuite coal::coal
+        PRIVATE yaml-cpp::yaml-cpp tinyxml2::tinyxml2
 )
 
 # Optional Links

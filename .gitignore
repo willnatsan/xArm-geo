@@ -4,6 +4,9 @@
 .cache/
 *build*/
 
+# Ignore `compile_commands.json` (Contains Absolute Paths)
+compile_commands.json
+
 # Ignore generated MJCF XML & URDF Files (Contains Absolute Paths)
 assets/urdf/_compiled/*.urdf
 assets/mjcf/*.xml

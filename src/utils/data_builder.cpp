@@ -70,7 +70,8 @@ namespace xarm_geo::internal {
                 link["inertia"]["ixz"].as<double>(), link["inertia"]["iyz"].as<double>(),
                 link["inertia"]["izz"].as<double>();
 
-            auto spatial_inertia_com = xarm_geo::manifold::SE3::SpatialInertia::Zero();
+            xarm_geo::manifold::SE3::SpatialInertia spatial_inertia_com =
+                xarm_geo::manifold::SE3::SpatialInertia::Zero();
             spatial_inertia_com.topLeftCorner(3, 3) = com_inertia;
             spatial_inertia_com.bottomRightCorner(3, 3) = mass * Eigen::Matrix3d::Identity();
             model.spatial_inertias_com.emplace_back(spatial_inertia_com);
@@ -163,7 +164,6 @@ namespace xarm_geo {
 
         std::pair<std::string, std::string> desc_files =
             internal::get_description_files(dof, robot_type);
-
         model.urdf_file = desc_files.first;
         model.mjcf_file = desc_files.second;
 

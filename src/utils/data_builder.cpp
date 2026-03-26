@@ -1,11 +1,15 @@
 #include <iostream>
 
+#include <coal/mesh_loader/loader.h>
+#include <coal/serialization/BVH_model.h>
+#include <coal/shape/geometric_shapes.h>
 #include <tinyxml2.h>
 #include <yaml-cpp/yaml.h>
 
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/utils/data_builder.h>
 #include <xarm_geo/utils/data_config.h>
+#include <xarm_geo/utils/parsing_utils.h>
 #include <xarm_geo_config.h>
 
 namespace xarm_geo::internal {
@@ -106,7 +110,7 @@ namespace xarm_geo::internal {
         model.limits.clear();
         model.limits.reserve(model.dof);
 
-        std::map<std::string, int> link_to_joint_map;
+        std::unordered_map<std::string, int> link_to_joint_map;
 
         // Parsing Joints
         int joint_idx = 0;
@@ -149,6 +153,97 @@ namespace xarm_geo::internal {
                       << ") than DOF (" << model.dof << ")." << "\n";
         }
     }
+
+    void load_geometry_params(CollisionModel &col_model, const Model &kin_model) {
+        tinyxml2::XMLDocument urdf;
+        std::string urdf_path = URDF_PATH + kin_model.urdf_file;
+
+        if (urdf.LoadFile(urdf_path.c_str()) != tinyxml2::XML_SUCCESS) {
+            std::cerr << "Error loading URDF file: " << urdf_path << "\n";
+            return;
+        }
+
+        const tinyxml2::XMLElement *robot = urdf.FirstChildElement("robot");
+        if (!robot) {
+            std::cerr << "Error parsing <robot> from URDF file: " << urdf_path << "\n";
+            return;
+        }
+
+        // 1. Build Link Name -> Joint ID Map
+        std::unordered_map<std::string, size_t> link_to_joint_map;
+        size_t joint_idx = 0;
+
+        for (const tinyxml2::XMLElement *child = robot->FirstChildElement("joint");
+             child != nullptr; child = child->NextSiblingElement("joint")) {
+
+            const tinyxml2::XMLElement *child_link = child->FirstChildElement("child");
+            if (!child_link) continue;
+
+            const char *link_name = child_link->Attribute("link");
+            if (!link_name) continue;
+
+            const char *type_attr = child->Attribute("type");
+            std::string type = type_attr ? type_attr : "";
+
+            if (type == "revolute" || type == "continuous") {
+                // It's an active joint. Map it and increment the index.
+                link_to_joint_map[std::string(link_name)] = joint_idx;
+                joint_idx++;
+                if (joint_idx >= kin_model.dof) break;
+            } else if (type == "fixed") {
+                // It's a bolted part. Map it to the CURRENT joint index so it moves
+                // with the parent kinematic frame, rather than being glued to the World
+                // (Note: joint_idx is already pointing to the next available index,
+                // so we use joint_idx - 1, safely bounded at 0).
+                size_t parent_idx = (joint_idx > 0) ? (joint_idx - 1) : 0;
+                link_to_joint_map[std::string(link_name)] = parent_idx;
+            }
+        }
+
+        static coal::CachedMeshLoader mesh_loader;
+
+        // 2. Parse Links and Extract Collision Geometry
+        for (const tinyxml2::XMLElement *link = robot->FirstChildElement("link"); link;
+             link = link->NextSiblingElement("link")) {
+
+            const char *name_attr = link->Attribute("name");
+            if (!name_attr) continue;
+            std::string link_name = name_attr;
+
+            size_t current_joint_idx = 0;
+            // .contains() is C++20. If compiling older, use .count() or .find()
+            if (link_to_joint_map.contains(link_name)) {
+                current_joint_idx = link_to_joint_map[link_name];
+            }
+
+            for (const tinyxml2::XMLElement *col = link->FirstChildElement("collision"); col;
+                 col = col->NextSiblingElement("collision")) {
+
+                manifold::SE3 offset = parse_origin(col->FirstChildElement("origin"));
+                const tinyxml2::XMLElement *geom = col->FirstChildElement("geometry");
+                if (!geom) continue;
+
+                // Handle Meshes
+                const tinyxml2::XMLElement *mesh_xml = geom->FirstChildElement("mesh");
+                if (mesh_xml) {
+                    const char *file = mesh_xml->Attribute("filename");
+                    if (!file) continue;
+
+                    Eigen::Vector3d scale =
+                        parse_vec3(mesh_xml->Attribute("scale"), Eigen::Vector3d::Ones());
+                    coal::Vec3s coal_scale(scale.x(), scale.y(), scale.z());
+
+                    try {
+                        auto mesh_geom = mesh_loader.load(file, coal_scale);
+                        col_model.add_geometry(link_name + "_col", current_joint_idx, offset,
+                                               mesh_geom);
+                    } catch (const std::exception &e) {
+                        std::cerr << "Failed to load mesh: " << file << " | " << e.what() << "\n";
+                    }
+                }
+            }
+        }
+    }
 }  // namespace xarm_geo::internal
 
 namespace xarm_geo {
@@ -172,5 +267,14 @@ namespace xarm_geo {
         internal::load_constraint_params(model, model.urdf_file);
 
         return model;
+    }
+
+    [[nodiscard]] auto build_collision_model(const Model &kin_model) -> CollisionModel {
+        CollisionModel col_model;
+
+        internal::load_geometry_params(col_model, kin_model);
+        col_model.add_all_collision_pairs();
+
+        return col_model;
     }
 }  // namespace xarm_geo

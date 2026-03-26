@@ -7,8 +7,8 @@
 #include <yaml-cpp/yaml.h>
 
 #include <xarm_geo/core/manifold.h>
-#include <xarm_geo/utils/data_builder.h>
-#include <xarm_geo/utils/data_config.h>
+#include <xarm_geo/utils/model_builder.h>
+#include <xarm_geo/utils/model_config.h>
 #include <xarm_geo/utils/parsing_utils.h>
 #include <xarm_geo_config.h>
 
@@ -269,10 +269,27 @@ namespace xarm_geo {
         return model;
     }
 
-    [[nodiscard]] auto build_collision_model(const Model &kin_model) -> CollisionModel {
+    [[nodiscard]] auto build_collision_model(const Model &kin_model, bool add_ground_plane)
+        -> CollisionModel {
         CollisionModel col_model;
 
+        // Load the geometry from the URDF
         internal::load_geometry_params(col_model, kin_model);
+
+        // Add the infinite ground plane (if requested)
+        if (add_ground_plane) {
+            // A halfspace defined by a normal vector pointing UP (0, 0, 1)
+            // and a distance of 0 along that normal.
+            auto ground_geom = std::make_shared<coal::Halfspace>(coal::Vec3s(0, 0, 1), 0.0);
+
+            manifold::SE3 ground_pose = manifold::SE3::Identity();
+            ground_pose.r3() << 0.0, 0.0, 0.0;
+
+            // Attach it to Joint 0 (The World/Environment)
+            col_model.add_geometry("ground_plane", 0, ground_pose, ground_geom);
+        }
+
+        // Compile the Collision Pairs
         col_model.add_all_collision_pairs();
 
         return col_model;

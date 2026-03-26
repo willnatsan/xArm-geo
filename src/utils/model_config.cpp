@@ -1,6 +1,6 @@
 #include <iostream>
 
-#include <xarm_geo/utils/data_config.h>
+#include <xarm_geo/utils/model_config.h>
 
 namespace xarm_geo::internal {
     [[nodiscard]] auto parse_serial_number(const std::string &robot_sn, bool model1300)

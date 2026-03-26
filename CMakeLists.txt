@@ -124,8 +124,8 @@ set(LIB_SOURCES
         src/modelling/kinematics.cpp
         src/modelling/dynamics.cpp
         src/utils/parsing_utils.cpp
-        src/utils/data_builder.cpp
-        src/utils/data_config.cpp
+        src/utils/model_builder.cpp
+        src/utils/model_config.cpp
 )
 
 if(BUILD_WITH_MUJOCO)

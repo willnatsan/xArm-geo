@@ -121,11 +121,11 @@ set(LIB_SOURCES
         src/xarm_geo.cpp
         src/core/data.cpp
         src/modelling/collision.cpp
-        src/modelling/kinematics.cpp
         src/modelling/dynamics.cpp
-        src/utils/parsing_utils.cpp
+        src/modelling/kinematics.cpp
         src/utils/model_builder.cpp
         src/utils/model_config.cpp
+        src/utils/parsing_utils.cpp
 )
 
 if(BUILD_WITH_MUJOCO)

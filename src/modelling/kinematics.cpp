@@ -1,4 +1,3 @@
-#include "xarm_geo/core/manifold.h"
 #include <xarm_geo/modelling/kinematics.h>
 
 namespace xarm_geo {
@@ -11,12 +10,16 @@ namespace xarm_geo {
         for (int i = 0; i < model.dof; ++i) {
             const manifold::SE3::Tangent twist_i = model.screw_axes_space[i] * q[i];
             T *= manifold::SE3::exp(twist_i);
-            const manifold::SE3 T_global = T * model.home_pose_tree[i];
+            const manifold::SE3 T_global = T * model.home_pose_tree[i + 1];
 
             state.pose_tree[i + 1] = T_global;
             state.pose_tree_local[i + 1] = state.pose_tree[i].inverse() * T_global;
         }
-        state.ee_pose = state.pose_tree.back();
+
+        state.ee_pose = T * model.home_pose;
+
+        state.pose_tree[model.dof + 1] = state.ee_pose;
+        state.pose_tree_local[model.dof + 1] = state.pose_tree[model.dof].inverse() * state.ee_pose;
     };
 
     void compute_kinematics(const Model &model, State &state,
@@ -40,12 +43,16 @@ namespace xarm_geo {
 
             const manifold::SE3::Tangent twist_i = model.screw_axes_space[i] * q[i];
             T *= manifold::SE3::exp(twist_i);
-            const manifold::SE3 T_global = T * model.home_pose_tree[i];
+            const manifold::SE3 T_global = T * model.home_pose_tree[i + 1];
 
             state.pose_tree[i + 1] = T_global;
             state.pose_tree_local[i + 1] = state.pose_tree[i].inverse() * T_global;
         }
-        state.ee_pose = state.pose_tree.back();
+
+        state.ee_pose = T * model.home_pose;
+
+        state.pose_tree[model.dof + 1] = state.ee_pose;
+        state.pose_tree_local[model.dof + 1] = state.pose_tree[model.dof].inverse() * state.ee_pose;
 
         state.body_jacobian = state.ee_pose.inverse().Ad() * state.space_jacobian;
 

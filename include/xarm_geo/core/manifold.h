@@ -50,7 +50,7 @@ namespace xarm_geo::manifold {
     // --- SE(3) & SO(3) Wrappers ---
 
     // SE(3) Wrapper (6D Spatial Kinematics/Dynamics)
-    struct SE3 : public smooth::SE3d {
+    struct SE3 final : public smooth::SE3d {
         using smooth::SE3d::SE3d;
         SE3(const smooth::SE3d &base) : smooth::SE3d(base) {}
 
@@ -62,7 +62,7 @@ namespace xarm_geo::manifold {
     };
 
     // SO(3) Wrapper (3D Rotational Kinematics/Dynamics)
-    struct SO3 : public smooth::SO3d {
+    struct SO3 final : public smooth::SO3d {
         using smooth::SO3d::SO3d;
         SO3(const smooth::SO3d &base) : smooth::SO3d(base) {}
 
@@ -94,9 +94,8 @@ namespace xarm_geo::manifold {
     // --- Matrix Type Aliases ---
 
     // Maps Joint Space Velocity -> Tangent Space
-    template <LieGroup G>
-    using Jacobian =
-        Eigen::Matrix<typename G::Scalar, G::Tangent::SizeAtCompileTime, Eigen::Dynamic>;
+    template <LieGroup G, int DOF>
+    using Jacobian = Eigen::Matrix<typename G::Scalar, G::Tangent::SizeAtCompileTime, DOF>;
 
     // Maps Tangent Space -> Co-Tangent Space
     template <LieGroup G>

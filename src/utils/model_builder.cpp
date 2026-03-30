@@ -16,7 +16,9 @@ namespace xarm_geo::internal {
     void load_kinematic_params(xarm_geo::Model &model, const std::string &kinematic_file) {
         const YAML::Node config = YAML::LoadFile(KINEMATIC_PARAMS_PATH + kinematic_file);
         const YAML::Node kinematics = config["kinematics"];
-        auto pose_curr = xarm_geo::manifold::SE3::Identity();
+
+        auto pose_curr = manifold::SE3::Identity();
+        model.home_pose_tree.emplace_back(pose_curr);
 
         for (auto const &joint : kinematics) {
             const YAML::Node joint_data = joint.second;
@@ -32,8 +34,8 @@ namespace xarm_geo::internal {
             Eigen::Quaterniond quat = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
                                       Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
                                       Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
-            xarm_geo::manifold::SO3 rotation(quat);
-            xarm_geo::manifold::SE3 transform(rotation, translation);
+            manifold::SO3 rotation(quat);
+            manifold::SE3 transform(rotation, translation);
 
             pose_curr *= transform;
             model.home_pose_tree.emplace_back(pose_curr);
@@ -42,15 +44,36 @@ namespace xarm_geo::internal {
             const auto w = pose_curr.so3() * Eigen::Vector3d::UnitZ();
             const auto v = -w.cross(q);
 
-            xarm_geo::manifold::SE3::Twist screw_axis_space;
+            manifold::SE3::Twist screw_axis_space;
             screw_axis_space.head<3>() = v;
             screw_axis_space.tail<3>() = w;
             model.screw_axes_space.push_back(screw_axis_space);
         }
 
+        manifold::SE3 T_flange_to_ee = manifold::SE3::Identity();
+        if (config["end_effector"]) {
+            const YAML::Node ee_data = config["end_effector"];
+            const auto x = ee_data["x"].as<double>(0.0);
+            const auto y = ee_data["y"].as<double>(0.0);
+            const auto z = ee_data["z"].as<double>(0.0);
+            const auto roll = ee_data["roll"].as<double>(0.0);
+            const auto pitch = ee_data["pitch"].as<double>(0.0);
+            const auto yaw = ee_data["yaw"].as<double>(0.0);
+
+            Eigen::Vector3d ee_trans(x, y, z);
+            Eigen::Quaterniond ee_quat = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
+                                         Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
+                                         Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
+
+            T_flange_to_ee = xarm_geo::manifold::SE3(xarm_geo::manifold::SO3(ee_quat), ee_trans);
+        }
+
+        pose_curr *= T_flange_to_ee;
+
+        model.home_pose_tree.emplace_back(pose_curr);
         model.home_pose = pose_curr;
 
-        const xarm_geo::manifold::SE3 M_inv = model.home_pose.inverse();
+        const manifold::SE3 M_inv = model.home_pose.inverse();
         for (auto const &screw_axis_space : model.screw_axes_space) {
             model.screw_axes_body.emplace_back(M_inv.Ad() * screw_axis_space);
         }
@@ -74,18 +97,18 @@ namespace xarm_geo::internal {
                 link["inertia"]["ixz"].as<double>(), link["inertia"]["iyz"].as<double>(),
                 link["inertia"]["izz"].as<double>();
 
-            xarm_geo::manifold::SE3::SpatialInertia spatial_inertia_com =
-                xarm_geo::manifold::SE3::SpatialInertia::Zero();
+            manifold::SE3::SpatialInertia spatial_inertia_com =
+                manifold::SE3::SpatialInertia::Zero();
             spatial_inertia_com.topLeftCorner(3, 3) = com_inertia;
             spatial_inertia_com.bottomRightCorner(3, 3) = mass * Eigen::Matrix3d::Identity();
             model.spatial_inertias_com.emplace_back(spatial_inertia_com);
 
             // Reference Frame Change - CoM -> Link Origin
             // Assuming `origin` defines Transform from Link Origin -> CoM
-            xarm_geo::manifold::SE3 T_origin_com(xarm_geo::manifold::SO3::Identity(), com_pos);
+            manifold::SE3 T_origin_com(manifold::SO3::Identity(), com_pos);
             Eigen::Matrix<double, 6, 6> Ad_T_com_origin = T_origin_com.inverse().Ad();
 
-            xarm_geo::manifold::SE3::SpatialInertia spatial_inertia_link =
+            manifold::SE3::SpatialInertia spatial_inertia_link =
                 Ad_T_com_origin.transpose() * model.spatial_inertias_com[i] * Ad_T_com_origin;
             model.spatial_inertias_link.push_back(spatial_inertia_link);
         }

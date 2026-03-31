@@ -61,4 +61,53 @@ namespace xarm_geo {
         rot.bottomRightCorner<3, 3>() = state.ee_pose.so3().matrix();
         state.frame_jacobian = rot * state.body_jacobian;
     };
+
+    void inverse_diff_kinematics(const Model &model, State &state,
+                                 const manifold::SE3::Twist &target_twist,
+                                 const IKOptions &options) {
+
+        const auto &J = state.body_jacobian;  // Alias for brevity
+
+        // Compute DLS Matrix: A = J^T * J
+        // .noalias() prevents hidden Heap Allocation
+        state.A.noalias() = J.transpose() * J;
+
+        // Apply Damping Factor: A = A + lambda^2 * I (lambda = Damping Factor)
+        state.A.diagonal().array() += (options.damping * options.damping);
+
+        // Compute the Target Vector: b = J^T * V
+        state.b.noalias() = J.transpose() * target_twist;
+
+        // Solve for Joint Velocities w/ Cholesky Decomposition (LDLT)
+        state.v = state.A.ldlt().solve(state.b);
+    };
+
+    auto inverse_kinematics(const Model &model, State &state,
+                            const Eigen::Ref<const Eigen::VectorXd> &q,
+                            const manifold::SE3 &target_pose, const IKOptions &options) -> bool {
+
+        // Initialise the Output `state.q` from the Initial Starting Configuration `q`
+        state.q = q;
+
+        for (int iter = 0; iter < options.max_iters; ++iter) {
+            // Update Kinematic Tree (As `state.q` changes every iteration)
+            compute_jacobians(model, state, state.q);
+
+            // Compute Error in SE(3)
+            manifold::SE3 T_err = state.ee_pose.inverse() * target_pose;
+
+            // Map Error to Lie Algebra se(3)
+            manifold::SE3::Twist V_err = T_err.log();
+
+            // Check for Convergence
+            if (V_err.norm() < options.tolerance) { return true; }
+
+            // If not Converged -> Compute Joint Step & Apply
+            inverse_diff_kinematics(model, state, V_err, options);
+            state.q += state.v;
+        }
+
+        // If Loop Terminates without returning `true`, IK FAILED
+        return false;
+    };
 }  // namespace xarm_geo

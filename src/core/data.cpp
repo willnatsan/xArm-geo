@@ -9,6 +9,12 @@ namespace xarm_geo {
         body_jacobian.setZero(6, model.dof);
         frame_jacobian.setZero(6, model.dof);
 
+        v.setZero(model.dof);
+        q.setZero(model.dof);
+
+        A.setZero(model.dof, model.dof);
+        b.setZero(model.dof);
+
         v_links.resize(model.dof + 2, manifold::SE3::Tangent::Zero());
         a_links.resize(model.dof + 2, manifold::SE3::Tangent::Zero());
         f_links.resize(model.dof + 2, manifold::SE3::Wrench());

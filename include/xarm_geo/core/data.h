@@ -45,16 +45,22 @@ namespace xarm_geo {
         manifold::SE3 ee_pose;
         std::vector<manifold::SE3> pose_tree;
         std::vector<manifold::SE3> pose_tree_local;
+        Eigen::VectorXd v;  // Joint Velocities (Results of Inverse Diff. Kinematics)
+        Eigen::VectorXd q;  // Joint Positions (Results of Inverse Kinematics)
 
         // 6xN Jacobians mapping Joint Velocity -> SE(3) Tangent Space
         manifold::SE3::Jacobian space_jacobian;
         manifold::SE3::Jacobian body_jacobian;
         manifold::SE3::Jacobian frame_jacobian;
 
-        // End-Effector twists
+        // End-Effector Twists
         manifold::SE3::Twist space_twist;
         manifold::SE3::Twist body_twist;
         manifold::SE3::Twist frame_twist;
+
+        // Levenberg-Marquadt IK Matrices
+        Eigen::MatrixXd A;
+        Eigen::VectorXd b;
 
         // Internal Link Twists and Accelerations (Needed for RNEA Forward Pass)
         std::vector<manifold::SE3::Twist> v_links;

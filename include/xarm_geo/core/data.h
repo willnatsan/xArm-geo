@@ -27,11 +27,10 @@ namespace xarm_geo {
         // Kinematic Parameters
         manifold::SE3 home_pose;
         std::vector<manifold::SE3> home_pose_tree;
-        std::vector<manifold::SE3::Tangent> screw_axes_space;
-        std::vector<manifold::SE3::Tangent> screw_axes_body;
+        std::vector<manifold::SE3::Twist> screw_axes_space;
+        std::vector<manifold::SE3::Twist> screw_axes_local;
 
         // Dynamic Parameters
-        std::vector<manifold::SE3::SpatialInertia> spatial_inertias_com;
         std::vector<manifold::SE3::SpatialInertia> spatial_inertias_link;
 
         // Constraints
@@ -43,7 +42,6 @@ namespace xarm_geo {
 
     struct State {
         // --- Kinematic Cache ---
-
         manifold::SE3 ee_pose;
         std::vector<manifold::SE3> pose_tree;
         std::vector<manifold::SE3> pose_tree_local;
@@ -53,24 +51,26 @@ namespace xarm_geo {
         manifold::SE3::Jacobian body_jacobian;
         manifold::SE3::Jacobian frame_jacobian;
 
-        // End-effector twists
-        manifold::SE3::Tangent space_twist;
-        manifold::SE3::Tangent body_twist;
-        manifold::SE3::Tangent frame_twist;
+        // End-Effector twists
+        manifold::SE3::Twist space_twist;
+        manifold::SE3::Twist body_twist;
+        manifold::SE3::Twist frame_twist;
 
-        // Internal Link Twists and Accelerations (Needed for RNEA)
-        std::vector<manifold::SE3::Tangent> v_links;
-        std::vector<manifold::SE3::Tangent> a_links;
+        // Internal Link Twists and Accelerations (Needed for RNEA Forward Pass)
+        std::vector<manifold::SE3::Twist> v_links;
+        std::vector<manifold::SE3::SpatialAcceleration> a_links;
 
-        // Internal Spatial Wrenches (Needed for RNEA backward pass)
-        std::vector<manifold::SE3::Wrench> f_links;
+        // Local Transforms between Links (Needed for RNEA Backward Pass)
+        std::vector<manifold::SE3> T_i_parent_cache;
 
         // --- Dynamic Cache ---
-        Eigen::MatrixXd M;        // Joint-space Mass matrix M(q) is Ndof x Ndof.
-        Eigen::VectorXd h;        // Bias forces (Coriolis + Gravity)
-        Eigen::VectorXd tau;      // Joint torques
-        Eigen::VectorXd q_accel;  // Joint accelerations
+        Eigen::MatrixXd M;    // Joint-space Mass matrix
+        Eigen::VectorXd h;    // Bias forces (Coriolis + Gravity)
+        Eigen::VectorXd tau;  // Joint torques
+        Eigen::VectorXd a;    // Joint accelerations
 
+        // Internal Spatial Wrenches (Needed for RNEA Backward Pass)
+        std::vector<manifold::SE3::Wrench> f_links;
         // --- Pre-Allocation ---
         explicit State(const Model &model);
     };

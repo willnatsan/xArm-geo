@@ -3,10 +3,10 @@
 #include <xarm_geo/core/data.h>
 
 namespace xarm_geo {
-    void compute_kinematics(const Model &model, State &state,
+    void forward_kinematics(const Model &model, State &state,
                             const Eigen::Ref<const Eigen::VectorXd> &q);
 
-    void compute_kinematics(const Model &model, State &state,
+    void forward_kinematics(const Model &model, State &state,
                             const Eigen::Ref<const Eigen::VectorXd> &q,
                             const Eigen::Ref<const Eigen::VectorXd> &v);
 

@@ -13,10 +13,12 @@ namespace xarm_geo {
         a_links.resize(model.dof + 2, manifold::SE3::Tangent::Zero());
         f_links.resize(model.dof + 2, manifold::SE3::Wrench());
 
+        T_i_parent_cache.resize(model.dof + 1, manifold::SE3::Identity());
+
         M.setZero(model.dof, model.dof);
         h.setZero(model.dof);
         tau.setZero(model.dof);
-        q_accel.setZero(model.dof);
+        a.setZero(model.dof);
     }
 
 }  // namespace xarm_geo

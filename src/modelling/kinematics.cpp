@@ -1,7 +1,7 @@
 #include <xarm_geo/modelling/kinematics.h>
 
 namespace xarm_geo {
-    void compute_kinematics(const Model &model, State &state,
+    void forward_kinematics(const Model &model, State &state,
                             const Eigen::Ref<const Eigen::VectorXd> &q) {
         manifold::SE3 T = manifold::SE3::Identity();
         state.pose_tree[0] = T;
@@ -22,7 +22,7 @@ namespace xarm_geo {
         state.pose_tree_local[model.dof + 1] = state.pose_tree[model.dof].inverse() * state.ee_pose;
     };
 
-    void compute_kinematics(const Model &model, State &state,
+    void forward_kinematics(const Model &model, State &state,
                             const Eigen::Ref<const Eigen::VectorXd> &q,
                             const Eigen::Ref<const Eigen::VectorXd> &v) {
         compute_jacobians(model, state, q);

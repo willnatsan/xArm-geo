@@ -73,14 +73,20 @@ namespace xarm_geo::internal {
         model.home_pose_tree.emplace_back(pose_curr);
         model.home_pose = pose_curr;
 
-        const manifold::SE3 M_inv = model.home_pose.inverse();
-        for (auto const &screw_axis_space : model.screw_axes_space) {
-            model.screw_axes_body.emplace_back(M_inv.Ad() * screw_axis_space);
+        for (size_t i = 0; i < model.screw_axes_space.size(); ++i) {
+            // home_pose_tree[0] is the base frame.
+            // home_pose_tree[i + 1] is the home pose of link i relative to the base frame.
+            const manifold::SE3 link_i_home_inv = model.home_pose_tree[i + 1].inverse();
+
+            // Map the spatial screw axis into the local frame of the corresponding link
+            model.screw_axes_local.emplace_back(link_i_home_inv.Ad() * model.screw_axes_space[i]);
         }
     }
 
     void load_inertial_params(xarm_geo::Model &model, const std::string &inertial_file) {
         const YAML::Node config = YAML::LoadFile(INERTIAL_PARAMS_PATH + inertial_file);
+        std::vector<manifold::SE3::SpatialInertia> spatial_inertias_com;
+
         for (int i = 0; i < model.dof; i++) {
             const YAML::Node link = config["link" + std::to_string(i + 1)];
 
@@ -101,15 +107,16 @@ namespace xarm_geo::internal {
                 manifold::SE3::SpatialInertia::Zero();
             spatial_inertia_com.topLeftCorner(3, 3) = com_inertia;
             spatial_inertia_com.bottomRightCorner(3, 3) = mass * Eigen::Matrix3d::Identity();
-            model.spatial_inertias_com.emplace_back(spatial_inertia_com);
+            spatial_inertias_com.emplace_back(spatial_inertia_com);
 
-            // Reference Frame Change - CoM -> Link Origin
+            // Reference Frame Change - CoM -> Link Origin (Joint Frame)
             // Assuming `origin` defines Transform from Link Origin -> CoM
             manifold::SE3 T_origin_com(manifold::SO3::Identity(), com_pos);
             Eigen::Matrix<double, 6, 6> Ad_T_com_origin = T_origin_com.inverse().Ad();
 
             manifold::SE3::SpatialInertia spatial_inertia_link =
-                Ad_T_com_origin.transpose() * model.spatial_inertias_com[i] * Ad_T_com_origin;
+                Ad_T_com_origin.transpose() * spatial_inertias_com[i] * Ad_T_com_origin;
+
             model.spatial_inertias_link.push_back(spatial_inertia_link);
         }
     }

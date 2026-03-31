@@ -19,7 +19,7 @@ namespace xarm_geo::manifold {
         VectorType coeffs = VectorType::Zero();
 
         CoTangent() = default;
-        explicit CoTangent(const VectorType &v) : coeffs(v) {}
+        CoTangent(const VectorType &v) : coeffs(v) {}
 
         // Math Operations
 
@@ -41,8 +41,15 @@ namespace xarm_geo::manifold {
             return CoTangent(lhs.coeffs * rhs);
         }
 
+        template <typename MatrixDerived>
+        [[nodiscard]] friend auto operator*(const Eigen::MatrixBase<MatrixDerived> &inertia,
+                                            const typename G::Tangent &accel) -> CoTangent {
+            return CoTangent(inertia * Eigen::Matrix<Scalar, dof, 1>(accel));
+        }
+
         // Dual Pairing (e.g., Mechanical Power for SE(3): P = W^T * V)
-        [[nodiscard]] auto dot(const typename G::Tangent &tangent) const -> Scalar {
+        template <typename TangentType>
+        [[nodiscard]] auto dot(const TangentType &tangent) const -> Scalar {
             return coeffs.dot(tangent);
         }
     };
@@ -57,6 +64,7 @@ namespace xarm_geo::manifold {
         using Jacobian = Eigen::Matrix<Scalar, Tangent::SizeAtCompileTime, Eigen::Dynamic>;
         using SpatialInertia =
             Eigen::Matrix<Scalar, Tangent::SizeAtCompileTime, Tangent::SizeAtCompileTime>;
+        using SpatialAcceleration = smooth::SE3d::Tangent;
         using Twist = smooth::SE3d::Tangent;
         using Wrench = CoTangent<smooth::SE3d>;
     };
@@ -69,6 +77,7 @@ namespace xarm_geo::manifold {
         using Jacobian = Eigen::Matrix<Scalar, Tangent::SizeAtCompileTime, Eigen::Dynamic>;
         using RotInertia =
             Eigen::Matrix<Scalar, Tangent::SizeAtCompileTime, Tangent::SizeAtCompileTime>;
+        using RotAcceleration = smooth::SO3d::Tangent;
         using AngularVel = smooth::SO3d::Tangent;
         using Torque = CoTangent<smooth::SO3d>;
     };

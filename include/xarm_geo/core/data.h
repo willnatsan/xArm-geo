@@ -64,13 +64,19 @@ namespace xarm_geo {
         std::vector<manifold::SE3> T_i_parent_cache;
 
         // --- Dynamic Cache ---
-        Eigen::MatrixXd M;    // Joint-space Mass matrix
-        Eigen::VectorXd h;    // Bias forces (Coriolis + Gravity)
-        Eigen::VectorXd tau;  // Joint torques
-        Eigen::VectorXd a;    // Joint accelerations
+        Eigen::MatrixXd M;    // Joint-space Mass Matrix
+        Eigen::VectorXd h;    // Bias Forces (Coriolis + Gravity)
+        Eigen::VectorXd tau;  // Joint Torques (Results of Inverse Dynamics)
+        Eigen::VectorXd a;    // Joint Accelerations (Results of Forward Dynamics)
 
         // Internal Spatial Wrenches (Needed for RNEA Backward Pass)
         std::vector<manifold::SE3::Wrench> f_links;
+
+        // --- Constants & Simple Values ---
+        Eigen::VectorXd v_zero;  // Zero Joint Velocity Vector
+        Eigen::VectorXd a_zero;  // Zero Joint Acceleration Vector
+        Eigen::VectorXd a_ei;    // Unit Joint Acceleration Vector
+
         // --- Pre-Allocation ---
         explicit State(const Model &model);
     };

@@ -19,6 +19,10 @@ namespace xarm_geo {
         h.setZero(model.dof);
         tau.setZero(model.dof);
         a.setZero(model.dof);
+
+        v_zero.setZero(model.dof);
+        a_zero.setZero(model.dof);
+        a_ei.setZero(model.dof);
     }
 
 }  // namespace xarm_geo

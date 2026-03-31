@@ -1,12 +1,24 @@
-#include "xarm_geo/core/manifold.h"
 #include <xarm_geo/modelling/dynamics.h>
-#include <xarm_geo/modelling/kinematics.h>
 
 namespace xarm_geo {
     void forward_dynamics(const Model &model, State &state,
                           const Eigen::Ref<const Eigen::VectorXd> &q,
                           const Eigen::Ref<const Eigen::VectorXd> &v,
-                          const Eigen::Ref<const Eigen::VectorXd> &a) {};
+                          const Eigen::Ref<const Eigen::VectorXd> &tau,
+                          const manifold::SE3::Wrench &ee_wrench) {
+
+        // Compute Bias Forces & Mass Matrix
+        compute_bias_forces(model, state, q, v, ee_wrench);
+        compute_mass_matrix(model, state, q);
+
+        // Rearrange Dynamics Equation to solve for Joint Accelerations
+        // tau = M(q) * a + h
+        // M(q) * a = tau - h
+        Eigen::VectorXd tau_diff = tau - state.h;
+
+        // Solve for Joint Accelerations w/ Cholesky Decomposition
+        state.a = state.M.llt().solve(tau_diff);
+    };
 
     void inverse_dynamics(const Model &model, State &state,
                           const Eigen::Ref<const Eigen::VectorXd> &q,
@@ -17,9 +29,6 @@ namespace xarm_geo {
         // --- Initial Conditions (Assuming Gravity Term is Compensated Externally) ---
         state.v_links[0] = manifold::SE3::Twist::Zero();
         state.a_links[0] = manifold::SE3::SpatialAcceleration::Zero();
-
-        // Computing Forward Kinematics to get Link Frames for this Configuration
-        forward_kinematics(model, state, q);
 
         // --- Forward Pass (Iterate through moving links 1 to model.dof) ---
         for (int i = 0; i < model.dof; ++i) {
@@ -75,4 +84,36 @@ namespace xarm_geo {
             state.tau[i] = state.f_links[link_idx].dot(model.screw_axes_local[i]);
         }
     }
+
+    void compute_mass_matrix(const Model &model, State &state,
+                             const Eigen::Ref<const Eigen::VectorXd> &q) {
+
+        // Evaluating the Inverse Dynamics w/ Zero Joint Velocities + Unit Joint Accelerations
+        // The equation simplifies to: tau = M(q) * a
+        for (int i = 0; i < model.dof; ++i) {
+            state.a_ei[i] = 1.0;
+
+            // Resulting Joint Torque equals i-th column of Mass Matrix
+            inverse_dynamics(model, state, q, state.v_zero, state.a_ei);
+            state.M.col(i) = state.tau;
+
+            state.a_ei[i] = 0.0;  // Reset for next iteration
+        }
+
+        // Enforcing Symmetry for Numerical Stability
+        state.M = 0.5 * (state.M + state.M.transpose());
+    };
+
+    void compute_bias_forces(const Model &model, State &state,
+                             const Eigen::Ref<const Eigen::VectorXd> &q,
+                             const Eigen::Ref<const Eigen::VectorXd> &v,
+                             const manifold::SE3::Wrench &ee_wrench) {
+
+        // Evaluating the Inverse Dynamics w/ Zero Joint Accelerations
+        // The equation simplifies to: tau = h(q, v)
+        inverse_dynamics(model, state, q, v, state.a_zero, ee_wrench);
+
+        // Store resulting Joint Torques as the Bias Forces `h`
+        state.h = state.tau;
+    };
 }  // namespace xarm_geo

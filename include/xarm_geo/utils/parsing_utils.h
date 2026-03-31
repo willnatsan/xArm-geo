@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Eigen/Dense>
 #include <memory>
+
 #include <xarm_geo/core/manifold.h>
 
 // --- Forward Declarations ---

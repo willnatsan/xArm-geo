@@ -119,7 +119,7 @@ add_custom_target(${GENERATOR_TARGET_NAME} ALL DEPENDS ${GENERATED_FILES})
 
 set(LIB_SOURCES
         src/xarm_geo.cpp
-        src/core/data.cpp
+        src/core/system.cpp
         src/modelling/collision.cpp
         src/modelling/dynamics.cpp
         src/modelling/kinematics.cpp

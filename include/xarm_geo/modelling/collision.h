@@ -7,13 +7,13 @@
 #include <coal/collision_object.h>
 #include <coal/shape/geometric_shapes.h>
 
-#include <xarm_geo/core/data.h>
 #include <xarm_geo/core/manifold.h>
+#include <xarm_geo/core/system.h>
 #include <xarm_geo_config.h>
 
 namespace xarm_geo {
 
-    // --- Collision Data ---
+    // --- Collision Structs ---
 
     struct CollisionModel {
 
@@ -45,7 +45,7 @@ namespace xarm_geo {
         void add_all_collision_pairs();
     };
 
-    struct CollisionState {
+    struct CollisionData {
         std::vector<manifold::SE3> geom_poses;  // In Space Frame
 
         std::vector<coal::CollisionObject> collision_objects;
@@ -53,13 +53,13 @@ namespace xarm_geo {
         std::vector<coal::CollisionResult> collision_results;
 
         // --- Pre-Allocation ---
-        explicit CollisionState(const CollisionModel &col_model);
+        explicit CollisionData(const CollisionModel &col_model);
     };
 
     // --- Collision Algorithms ---
 
-    void update_geometry_poses(const Model &kin_model, const State &kin_state,
-                               const CollisionModel &col_model, CollisionState &col_state);
+    void update_geometry_poses(const Model &kin_model, const Data &kin_data,
+                               const CollisionModel &col_model, CollisionData &col_data);
 
-    auto compute_collisions(const CollisionModel &col_model, CollisionState &col_state) -> bool;
+    auto compute_collisions(const CollisionModel &col_model, CollisionData &col_data) -> bool;
 }  // namespace xarm_geo

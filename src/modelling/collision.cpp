@@ -4,7 +4,7 @@
 
 namespace xarm_geo {
 
-    // --- Collision Data Helpers & Constructor ---
+    // --- Collision Helpers & Constructor ---
 
     auto CollisionModel::add_geometry(const std::string &name, size_t parent_joint,
                                       const manifold::SE3 &placement,
@@ -31,7 +31,7 @@ namespace xarm_geo {
         }
     }
 
-    CollisionState::CollisionState(const CollisionModel &col_model) {
+    CollisionData::CollisionData(const CollisionModel &col_model) {
         size_t num_geoms = col_model.geometries.size();
         size_t num_pairs = col_model.collision_pairs.size();
 
@@ -47,35 +47,35 @@ namespace xarm_geo {
 
     // --- Collision Algorithms ---
 
-    void update_geometry_poses(const Model &kin_model, const State &kin_state,
-                               const CollisionModel &col_model, CollisionState &col_state) {
+    void update_geometry_poses(const Model &kin_model, const Data &kin_data,
+                               const CollisionModel &col_model, CollisionData &col_data) {
         for (size_t i = 0; i < col_model.geometries.size(); ++i) {
             const auto &obj = col_model.geometries[i];
 
-            // If parent is 0 (World), kin_state.pose_tree[0] should be Identity.
-            col_state.geom_poses[i] = kin_state.pose_tree[obj.parent_joint] * obj.pose;
+            // If parent is 0 (World), kin_data.pose_tree[0] should be Identity.
+            col_data.geom_poses[i] = kin_data.pose_tree[obj.parent_joint] * obj.pose;
 
-            // Update the stateful Collision Objects
-            coal::Transform3s transform(col_state.geom_poses[i].so3().matrix(),
-                                        col_state.geom_poses[i].r3());
-            col_state.collision_objects[i].setTransform(transform);
+            // Update the dataful Collision Objects
+            coal::Transform3s transform(col_data.geom_poses[i].so3().matrix(),
+                                        col_data.geom_poses[i].r3());
+            col_data.collision_objects[i].setTransform(transform);
         }
     }
 
-    auto compute_collisions(const CollisionModel &col_model, CollisionState &col_state) -> bool {
+    auto compute_collisions(const CollisionModel &col_model, CollisionData &col_data) -> bool {
         bool is_colliding = false;
 
         for (size_t i = 0; i < col_model.collision_pairs.size(); ++i) {
             const auto &pair = col_model.collision_pairs[i];
 
             // Clear previous Collision Result for this Collision Pair
-            col_state.collision_results[i].clear();
+            col_data.collision_results[i].clear();
 
             // Collision Detection
-            coal::collide(&col_state.collision_objects[pair.obj1_idx],
-                          &col_state.collision_objects[pair.obj2_idx],
-                          col_state.collision_requests[i], col_state.collision_results[i]);
-            if (col_state.collision_results[i].isCollision()) { is_colliding = true; }
+            coal::collide(&col_data.collision_objects[pair.obj1_idx],
+                          &col_data.collision_objects[pair.obj2_idx],
+                          col_data.collision_requests[i], col_data.collision_results[i]);
+            if (col_data.collision_results[i].isCollision()) { is_colliding = true; }
         }
 
         return is_colliding;

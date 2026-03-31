@@ -1,6 +1,6 @@
 #pragma once
 
-#include <xarm_geo/core/data.h>
+#include <xarm_geo/core/system.h>
 
 namespace xarm_geo {
     struct IKOptions {
@@ -9,21 +9,21 @@ namespace xarm_geo {
         double max_iters = 50;    // Maximum Iterations for IK
     };
 
-    void forward_kinematics(const Model &model, State &state,
+    void forward_kinematics(const Model &model, Data &data,
                             const Eigen::Ref<const Eigen::VectorXd> &q);
 
-    void forward_kinematics(const Model &model, State &state,
+    void forward_kinematics(const Model &model, Data &data,
                             const Eigen::Ref<const Eigen::VectorXd> &q,
                             const Eigen::Ref<const Eigen::VectorXd> &v);
 
-    void compute_jacobians(const Model &model, State &state,
+    void compute_jacobians(const Model &model, Data &data,
                            const Eigen::Ref<const Eigen::VectorXd> &q);
 
-    void inverse_diff_kinematics(const Model &model, State &state,
+    void inverse_diff_kinematics(const Model &model, Data &data,
                                  const manifold::SE3::Twist &target_twist,
                                  const IKOptions &options = IKOptions());
 
-    auto inverse_kinematics(const Model &model, State &state,
+    auto inverse_kinematics(const Model &model, Data &data,
                             const Eigen::Ref<const Eigen::VectorXd> &q,
                             const manifold::SE3 &target_pose,
                             const IKOptions &options = IKOptions()) -> bool;

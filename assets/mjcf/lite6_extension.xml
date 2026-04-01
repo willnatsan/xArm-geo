@@ -2,15 +2,21 @@
     <option integrator="implicitfast"/>
 
     <actuator>
-        <position joint="joint1" kp="2000" kv="200" forcerange="-50 50" ctrlrange="-6.28319 6.28319"/>
-        <position joint="joint2" kp="2000" kv="200" forcerange="-50 50" ctrlrange="-2.61799 2.61799"/>
-        <position joint="joint3" kp="2000" kv="200" forcerange="-32 32" ctrlrange="-0.061087 5.23599"/>
-        <position joint="joint4" kp="2000" kv="200" forcerange="-32 32" ctrlrange="-6.28319 6.28319"/>
-        <position joint="joint5" kp="2000" kv="200" forcerange="-32 32" ctrlrange="-2.1642 2.1642"/>
-        <position joint="joint6" kp="2000" kv="200" forcerange="-20 20" ctrlrange="-6.28319 6.28319"/>
+        <!-- <position joint="joint1" kp="2000" kv="200" forcerange="-50 50" ctrlrange="-6.28319 6.28319"/> -->
+        <!-- <position joint="joint2" kp="2000" kv="200" forcerange="-50 50" ctrlrange="-2.61799 2.61799"/> -->
+        <!-- <position joint="joint3" kp="2000" kv="200" forcerange="-32 32" ctrlrange="-0.061087 5.23599"/> -->
+        <!-- <position joint="joint4" kp="2000" kv="200" forcerange="-32 32" ctrlrange="-6.28319 6.28319"/> -->
+        <!-- <position joint="joint5" kp="2000" kv="200" forcerange="-32 32" ctrlrange="-2.1642 2.1642"/> -->
+        <!-- <position joint="joint6" kp="2000" kv="200" forcerange="-20 20" ctrlrange="-6.28319 6.28319"/> -->
+        <velocity joint="joint1" kv="200" forcerange="-50 50" ctrlrange="-3.14 3.14"/>
+        <velocity joint="joint2" kv="200" forcerange="-50 50" ctrlrange="-3.14 3.14"/>
+        <velocity joint="joint3" kv="200" forcerange="-32 32" ctrlrange="-3.14 3.14"/>
+        <velocity joint="joint4" kv="200" forcerange="-32 32" ctrlrange="-3.14 3.14"/>
+        <velocity joint="joint5" kv="200" forcerange="-32 32" ctrlrange="-3.14 3.14"/>
+        <velocity joint="joint6" kv="200" forcerange="-20 20" ctrlrange="-3.14 3.14"/>
     </actuator>
 
     <keyframe>
-        <key name="home" qpos="0 0 1.57 0 1.57 0" ctrl="0 0 1.57 0 1.57 0"/>
+        <key name="home" qpos="0 0 1.57 0 1.57 0" ctrl="0 0 0 0 0 0"/>
     </keyframe>
 </mujoco>

@@ -147,8 +147,7 @@ target_include_directories(
         PUBLIC
             $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:include>
-        PRIVATE
-            "${PROJECT_BINARY_DIR}"
+            $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}>
 )
 
 # Core Links
@@ -176,8 +175,8 @@ add_dependencies(${PROJECT_NAME} ${GENERATOR_TARGET_NAME})
 #
 # add_executable(basic_test tests/basic_test.cpp)
 # target_link_libraries(basic_test PRIVATE ${PROJECT_NAME})
-#
-# if(BUILD_WITH_MUJOCO)
-#     add_executable(mujoco_test tests/mujoco_test.cpp)
-#     target_link_libraries(mujoco_test PRIVATE ${PROJECT_NAME})
-# endif()
+
+if(BUILD_WITH_MUJOCO)
+    add_executable(simulation tests/simulation_test.cpp)
+    target_link_libraries(simulation PRIVATE ${PROJECT_NAME})
+endif()

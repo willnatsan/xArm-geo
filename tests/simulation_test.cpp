@@ -181,7 +181,7 @@ auto main(int argc, char *argv[]) -> int {
         TrajectoryState target = generate_trajectory(trajectory_mode, t);
 
         xarm_geo::manifold::SE3::Twist cmd_twist;
-        double kp = 8;  // Tracking gain
+        double kp = 10;  // Tracking gain
 
         if (use_geometric_controller) {
             // GEOMETRIC APPROACH [SE(3)]:

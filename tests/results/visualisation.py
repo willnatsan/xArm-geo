@@ -1,14 +1,30 @@
+import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
 
+# 1. Set up the argument parser
+parser = argparse.ArgumentParser(description="Plot end-effector trajectory and poses.")
+parser.add_argument(
+    "--trajectory",
+    type=int,
+    choices=[0, 1, 2],
+    default=2,  # Defaults to 2 to match your original script
+    help="Specify the trajectory number (0, 1, or 2) to load the corresponding CSV file. Default is 2.",
+)
+args = parser.parse_args()
+
+# 2. Dynamically construct the file path
+file_path = f"tests/results/trajectory_log_{args.trajectory}.csv"
+print(f"Loading data from: {file_path}")
+
 # Load the data
-df = pd.read_csv("tests/results/trajectory_log_2.csv")
+df = pd.read_csv(file_path)
 
 fig = plt.figure(figsize=(12, 10))
 ax = fig.add_subplot(111, projection="3d")
 
-# 1. Plot the continuous actual trajectory line (faint gray so the frames stand out)
+# Plot the continuous actual trajectory line (faint gray so the frames stand out)
 ax.plot(
     df["target_x"],
     df["target_y"],
@@ -19,13 +35,13 @@ ax.plot(
     label="Trajectory Path",
 )
 
-# 2. DOWNSAMPLE the data for the coordinate frames
+# DOWNSAMPLE the data for the coordinate frames
 step_size = 100  # Draw a frame every 100 simulation steps
 df_sampled = df.iloc[::step_size]
 
 axis_length = 0.02  # Length of the arrows in meters
 
-# 3. Loop through the sampled data and draw the triads
+# Loop through the sampled data and draw the triads
 for index, row in df_sampled.iterrows():
     pos = [row["actual_x"], row["actual_y"], row["actual_z"]]
 
@@ -80,7 +96,7 @@ ax.plot([], [], color="b", label="Local Z")
 ax.set_xlabel("X Position (m)")
 ax.set_ylabel("Y Position (m)")
 ax.set_zlabel("Z Position (m)")
-ax.set_title("End-Effector Pose (Coordinate Frames along Trajectory)")
+ax.set_title(f"End-Effector Pose (Trajectory {args.trajectory})")
 ax.legend()
 
 # Equal aspect ratio trick to prevent the 3D view from stretching the shape

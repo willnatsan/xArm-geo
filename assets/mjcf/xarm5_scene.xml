@@ -1,5 +1,6 @@
 <mujoco model="xArm5 scene">
     <include file="xarm5.xml"/>
+    <include file="xarm5_extension.xml"/>
 
     <visual>
         <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>

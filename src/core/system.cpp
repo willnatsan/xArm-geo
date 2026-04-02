@@ -12,6 +12,7 @@ namespace xarm_geo {
         body_jacobian.setZero(6, dof);
         frame_jacobian.setZero(6, dof);
 
+        q_guess.setZero(dof);
         q_out.setZero(dof);
         v_out.setZero(dof);
 

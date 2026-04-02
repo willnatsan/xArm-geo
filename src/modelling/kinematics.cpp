@@ -1,3 +1,4 @@
+#include <random>
 #include <xarm_geo/modelling/kinematics.h>
 
 namespace xarm_geo {
@@ -89,28 +90,49 @@ namespace xarm_geo {
                             const Eigen::Ref<const Eigen::VectorXd> &q,
                             const manifold::SE3 &target_pose, const IKOptions &options) -> bool {
 
-        // Initialise the Output `data.q_out` from the Initial Starting Configuration `q`
-        data.q_out = q;
+        // Initialise the Current Guess from the Initial Starting Configuration
+        data.q_guess = q;
 
-        for (int iter = 0; iter < options.max_iters; ++iter) {
-            // Update Kinematic Tree (As `data.q_out` changes every iteration)
-            compute_jacobians(model, data, data.q_out);
+        // Setup Random Number Generator for Subsequent Attempts
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<> dis(-M_PI, M_PI);
 
-            // Compute Error in SE(3)
-            manifold::SE3 T_err = data.ee_pose.inverse() * target_pose;
+        for (int attempt = 0; attempt < options.max_restarts; ++attempt) {
+            data.q_out = data.q_guess;
 
-            // Map Error to Lie Algebra se(3)
-            manifold::SE3::Twist V_err = T_err.log();
+            for (int iter = 0; iter < options.max_iters; ++iter) {
+                // Update Kinematic Tree (As `data.q_out` changes every iteration)
+                compute_jacobians(model, data, data.q_out);
 
-            // Check for Convergence
-            if (V_err.norm() < options.tolerance) { return true; }
+                // Compute Error in se(3)
+                manifold::SE3 T_err = data.ee_pose.inverse() * target_pose;
+                manifold::SE3::Twist V_err = T_err.log();
 
-            // If not Converged -> Compute Joint Step & Apply
-            inverse_diff_kinematics(model, data, V_err, options);
-            data.q_out += data.v_out;
+                // Check for Convergence
+                if (V_err.norm() < options.tolerance) { return true; }
+
+                // If not Converged -> Compute Joint Step & Apply
+                inverse_diff_kinematics(model, data, V_err, options);
+                data.q_out += data.v_out;
+
+                // Wrap & Clamp Joints
+                for (int i = 0; i < model.dof; ++i) {
+                    // 1. Wrap joint angles to [-pi, pi]
+                    while (data.q_out[i] > M_PI) data.q_out[i] -= 2.0 * M_PI;
+                    while (data.q_out[i] < -M_PI) data.q_out[i] += 2.0 * M_PI;
+
+                    // 2. Clamp joint to specified joint limits
+                    data.q_out[i] = std::max(model.limits[i].q_min,
+                                             std::min(data.q_out[i], model.limits[i].q_max));
+                }
+            }
+
+            // IK Loop Finished without returning `true` -> Go to Next Attempt w/ Random Seed
+            for (int i = 0; i < model.dof; ++i) { data.q_guess[i] = dis(gen); }
         }
 
-        // If Loop Terminates without returning `true`, IK FAILED
+        // If Loop Terminates without returning `true`, IK Failed to Converge
         return false;
     };
 }  // namespace xarm_geo

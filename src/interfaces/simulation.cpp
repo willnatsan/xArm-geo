@@ -1,8 +1,8 @@
-#include <xarm_geo/interfaces/simulation.h>
-#include <xarm_geo_config.h>
-
 #include <cassert>
 #include <stdexcept>
+
+#include <xarm_geo/interfaces/simulation.h>
+#include <xarm_geo_config.h>
 
 namespace xarm_geo {
 
@@ -169,7 +169,7 @@ namespace xarm_geo {
         for (int i = 0; i < n_steps; ++i) mj_step(this->model, this->data);
     }
 
-    // --- Simulation Queries ---
+    // --- Simulation Helpers ---
 
     auto Simulation::get_body_id(const std::string &body_name) const -> int {
         int id = mj_name2id(this->model, mjOBJ_BODY, body_name.c_str());
@@ -212,10 +212,16 @@ namespace xarm_geo {
         return J_b;
     }
 
-    auto Simulation::get_twist(const std::string &body_name, const Eigen::VectorXd &q_dot) const
+    auto Simulation::get_twist(const std::string &body_name, const Eigen::VectorXd &v) const
         -> manifold::SE3::Twist {
-        assert(q_dot.size() == this->dof_);
-        return this->get_jacobian(body_name) * q_dot;
+        assert(v.size() == this->dof_);
+        return this->get_jacobian(body_name) * v;
+    }
+
+    void Simulation::set_joint_positions(const Eigen::VectorXd &q) const {
+        assert(q.size() == this->dof_);
+        for (int i = 0; i < this->dof_; ++i) { data->qpos[i] = q[i]; }
+        mj_forward(model, data);
     }
 
     // --- Rendering & Visualisation ---

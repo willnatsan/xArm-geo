@@ -54,8 +54,9 @@ namespace xarm_geo {
         manifold::SE3::Twist body_twist;
         manifold::SE3::Twist frame_twist;
 
-        Eigen::VectorXd q_out;  // Results of Inverse Kinematics
-        Eigen::VectorXd v_out;  // Results of Inverse Differential Kinematics
+        Eigen::VectorXd q_guess;  // Intermediate Guess for Inverse Kinematics
+        Eigen::VectorXd q_out;    // Results of Inverse Kinematics
+        Eigen::VectorXd v_out;    // Results of Inverse Differential Kinematics
 
         // --- Dynamics Outputs ---
         Eigen::MatrixXd M;        // Joint-space Mass Matrix

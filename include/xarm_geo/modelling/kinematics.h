@@ -4,9 +4,10 @@
 
 namespace xarm_geo {
     struct IKOptions {
-        double damping = 1e-2;    // Levenberg-Marquadt Damping Factor
-        double tolerance = 1e-4;  // Convergence Threshold for IK
-        double max_iters = 50;    // Maximum Iterations for IK
+        double damping = 1e-2;     // Levenberg-Marquadt Damping Factor
+        double tolerance = 1e-4;   // Convergence Threshold for IK
+        double max_iters = 50;     // Maximum Iterations for IK
+        double max_restarts = 10;  // Maximum Restart Attempts for IK
     };
 
     void forward_kinematics(const Model &model, Data &data,

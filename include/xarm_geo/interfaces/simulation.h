@@ -70,7 +70,7 @@ namespace xarm_geo {
         void step();
         void step(int n_steps);
 
-        // --- Simulation Queries ---
+        // --- Simulation Helpers ---
 
         [[nodiscard]] auto get_timestep() const -> double { return model->opt.timestep; }
         [[nodiscard]] auto get_time() const -> double { return data->time; }
@@ -81,8 +81,10 @@ namespace xarm_geo {
         [[nodiscard]] auto get_pose_tree() const -> std::vector<manifold::SE3>;
         [[nodiscard]] auto get_jacobian(const std::string &body_name) const
             -> manifold::SE3::Jacobian;
-        [[nodiscard]] auto get_twist(const std::string &body_name,
-                                     const Eigen::VectorXd &q_dot) const -> manifold::SE3::Twist;
+        [[nodiscard]] auto get_twist(const std::string &body_name, const Eigen::VectorXd &v) const
+            -> manifold::SE3::Twist;
+
+        void set_joint_positions(const Eigen::VectorXd &q) const;
 
         // --- Rendering & Visualisation ---
 

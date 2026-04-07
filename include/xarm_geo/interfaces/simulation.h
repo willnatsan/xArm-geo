@@ -1,7 +1,9 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include <GLFW/glfw3.h>
 #include <mujoco/mjdata.h>
@@ -11,10 +13,18 @@
 #include <xarm_geo/interfaces/interface.h>
 
 namespace xarm_geo {
+    enum class ControlMode : std::uint8_t { VELOCITY, TORQUE };
+
     class Simulation {
 
     private:
         std::chrono::nanoseconds last_read_time_{0};
+        ControlMode current_mode_ = ControlMode::VELOCITY;
+
+        // Caches for Actuator Parameters -> Needed for Actuator Switching
+        std::vector<double> kv_gains_;
+        std::vector<double> force_limits_;
+        std::vector<double> vel_limits_;
 
     public:
         // --- MuJoCo Configuration Struct ---
@@ -66,7 +76,8 @@ namespace xarm_geo {
         // --- Concept: Controllable (WRITE) ---
 
         auto write(const JointVelocity &vel) -> InterfaceStatus;
-        // auto write(const JointTorque &tau) -> InterfaceStatus;
+        auto write(const JointTorque &torque) -> InterfaceStatus;
+        void set_control_mode(ControlMode mode);
 
         // --- Simulation Stepping ---
 

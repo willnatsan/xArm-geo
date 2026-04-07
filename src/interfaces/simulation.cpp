@@ -30,6 +30,23 @@ namespace xarm_geo {
         }
         this->data = mj_makeData(this->model);
 
+        // Cache Actuator Parameters
+        this->kv_gains_.resize(this->model->nu);
+        this->force_limits_.resize(this->model->nu);
+        this->vel_limits_.resize(this->model->nu);
+
+        for (int i = 0; i < this->model->nu; ++i) {
+            // Read the kv gain MuJoCo parsed from the XML (stored in gainprm[0])
+            this->kv_gains_[i] = this->model->actuator_gainprm[(i * mjNGAIN) + 0];
+
+            // Read limits directly from the model
+            this->vel_limits_[i] = this->model->actuator_ctrlrange[(i * 2) + 1];     // Max velocity
+            this->force_limits_[i] = this->model->actuator_forcerange[(i * 2) + 1];  // Max torque
+        }
+
+        // Ensure the simulation starts in the expected mode
+        this->current_mode_ = ControlMode::VELOCITY;
+
         // Set Marker ID
         try {
             this->marker_id_ = this->model->body_mocapid[this->get_body_id(config.marker_name)];
@@ -166,6 +183,7 @@ namespace xarm_geo {
     // --- Concept: Controllable (WRITE) ---
 
     auto Simulation::write(const JointVelocity &vel) -> InterfaceStatus {
+        if (this->current_mode_ != ControlMode::VELOCITY) { return InterfaceStatus::ERROR; }
         if (this->is_shutdown_ || vel.v.size() != this->dof_) { return InterfaceStatus::ERROR; };
 
         Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu) = vel.v;
@@ -173,15 +191,48 @@ namespace xarm_geo {
         return InterfaceStatus::OK;
     }
 
-    // auto Simulation::write(const JointTorque &torque) -> InterfaceStatus {
-    //     if (this->is_shutdown_ || torque.tau.size() != this->dof_) {
-    //         return InterfaceStatus::ERROR;
-    //     };
-    //
-    //     Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu) = torque.tau;
-    //
-    //     return InterfaceStatus::OK;
-    // }
+    auto Simulation::write(const JointTorque &torque) -> InterfaceStatus {
+        if (this->current_mode_ != ControlMode::TORQUE) { return InterfaceStatus::ERROR; }
+        if (this->is_shutdown_ || torque.tau.size() != this->dof_) {
+            return InterfaceStatus::ERROR;
+        };
+
+        Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu) = torque.tau;
+
+        return InterfaceStatus::OK;
+    }
+
+    void Simulation::set_control_mode(ControlMode mode) {
+        if (mode == current_mode_) return;
+
+        for (int i = 0; i < this->model->nu; ++i) {
+            if (mode == ControlMode::VELOCITY) {
+                // Restore Velocity Mode: F = kv * ctrl - kv * vel
+                this->model->actuator_gainprm[(i * mjNGAIN) + 0] = this->kv_gains_[i];
+                this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
+                this->model->actuator_biasprm[(i * mjNBIAS) + 2] = -this->kv_gains_[i];
+
+                // Restore velocity limits for control inputs
+                this->model->actuator_ctrlrange[(i * 2) + 0] = -this->vel_limits_[i];
+                this->model->actuator_ctrlrange[(i * 2) + 1] = this->vel_limits_[i];
+
+            } else if (mode == ControlMode::TORQUE) {
+                // Switch to Torque Mode: F = 1.0 * ctrl
+                this->model->actuator_gainprm[(i * mjNGAIN) + 0] = 1.0;
+                this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
+                this->model->actuator_biasprm[(i * mjNBIAS) + 2] = 0.0;
+
+                // Expand control limits to match the actuator's force range
+                this->model->actuator_ctrlrange[(i * 2) + 0] = -this->force_limits_[i];
+                this->model->actuator_ctrlrange[(i * 2) + 1] = this->force_limits_[i];
+            }
+        }
+
+        // Safety: Zero out the control buffer to prevent violent jumps during transition
+        Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
+
+        current_mode_ = mode;
+    }
 
     // --- Simulation Stepping ---
 

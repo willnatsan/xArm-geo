@@ -1,4 +1,3 @@
-#include <cassert>
 #include <stdexcept>
 
 #include <xarm_geo/interfaces/simulation.h>
@@ -92,7 +91,19 @@ namespace xarm_geo {
 
     Simulation::~Simulation() { shutdown(); }
 
-    auto Simulation::initialised() -> bool { return (this->model && this->data && this->window_); }
+    void Simulation::reset() const {
+        Eigen::Map<Eigen::VectorXd>(this->data->qvel, this->dof_).setZero();
+        Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
+    }
+
+    auto Simulation::is_running() const -> bool {
+        if (this->is_shutdown_) return false;
+
+        // If we have a UI window, its close button dictates our lifecycle.
+        if (this->window_) { return !glfwWindowShouldClose(this->window_); }
+
+        return true;
+    }
 
     void Simulation::shutdown() {
         if (is_shutdown_) return;
@@ -118,47 +129,58 @@ namespace xarm_geo {
         is_shutdown_ = true;
     }
 
-    auto Simulation::is_running() const -> bool {
-        return this->window_ && !glfwWindowShouldClose(this->window_);
-    }
-
-    void Simulation::reset() const {
-        Eigen::Map<Eigen::VectorXd>(this->data->qvel, this->dof_).setZero();
-        Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
-    }
-
     // --- Concept: Observable (READ) ---
 
-    void Simulation::read(JointPosition &pos) const {
-        assert(pos.q.size() == this->dof_);
+    auto Simulation::read(JointPosition &pos) -> InterfaceStatus {
+        if (this->is_shutdown_ || pos.q.size() != this->dof_) { return InterfaceStatus::ERROR; };
+
         pos.q = Eigen::Map<const Eigen::VectorXd>(this->data->qpos, this->dof_);
+        this->last_read_time_ =
+            std::chrono::nanoseconds(static_cast<long long>(this->data->time * 1e9));
+
+        return InterfaceStatus::OK;
     }
 
-    void Simulation::read(JointVelocity &vel) const {
-        assert(vel.v.size() == this->dof_);
+    auto Simulation::read(JointVelocity &vel) -> InterfaceStatus {
+        if (this->is_shutdown_ || vel.v.size() != this->dof_) { return InterfaceStatus::ERROR; };
+
         vel.v = Eigen::Map<const Eigen::VectorXd>(this->data->qvel, this->dof_);
+        this->last_read_time_ =
+            std::chrono::nanoseconds(static_cast<long long>(this->data->time * 1e9));
+
+        return InterfaceStatus::OK;
     }
 
-    void Simulation::read(JointTorque &tau) const {
-        assert(tau.tau.size() == this->dof_);
-        tau.tau = Eigen::Map<const Eigen::VectorXd>(this->data->qfrc_actuator, this->dof_);
+    auto Simulation::read(JointTorque &torque) -> InterfaceStatus {
+        if (this->is_shutdown_ || torque.tau.size() != this->dof_) {
+            return InterfaceStatus::ERROR;
+        };
+
+        torque.tau = Eigen::Map<const Eigen::VectorXd>(this->data->qfrc_actuator, this->dof_);
+        this->last_read_time_ =
+            std::chrono::nanoseconds(static_cast<long long>(this->data->time * 1e9));
+
+        return InterfaceStatus::OK;
     }
 
     // --- Concept: Controllable (WRITE) ---
 
-    // void Simulation::write(const JointPosition &pos) {
-    //     assert(pos.q.size() == this->dof_);
-    //     Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu) = pos.q;
-    // }
+    auto Simulation::write(const JointVelocity &vel) -> InterfaceStatus {
+        if (this->is_shutdown_ || vel.v.size() != this->dof_) { return InterfaceStatus::ERROR; };
 
-    void Simulation::write(const JointVelocity &vel) {
-        assert(vel.v.size() == this->dof_);
         Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu) = vel.v;
+
+        return InterfaceStatus::OK;
     }
 
-    // void Simulation::write(const JointTorque &tau) {
-    //     assert(tau.tau.size() == this->dof_);
-    //     Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu) = tau.tau;
+    // auto Simulation::write(const JointTorque &torque) -> InterfaceStatus {
+    //     if (this->is_shutdown_ || torque.tau.size() != this->dof_) {
+    //         return InterfaceStatus::ERROR;
+    //     };
+    //
+    //     Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu) = torque.tau;
+    //
+    //     return InterfaceStatus::OK;
     // }
 
     // --- Simulation Stepping ---
@@ -169,7 +191,7 @@ namespace xarm_geo {
         for (int i = 0; i < n_steps; ++i) mj_step(this->model, this->data);
     }
 
-    // --- Simulation Helpers ---
+    // --- Simulation Getters ---
 
     auto Simulation::get_body_id(const std::string &body_name) const -> int {
         int id = mj_name2id(this->model, mjOBJ_BODY, body_name.c_str());
@@ -214,12 +236,21 @@ namespace xarm_geo {
 
     auto Simulation::get_twist(const std::string &body_name, const Eigen::VectorXd &v) const
         -> manifold::SE3::Twist {
-        assert(v.size() == this->dof_);
+
+        if (v.size() != this->dof_) {
+            throw std::invalid_argument("get_twist: Vector size does not match DOF");
+        }
+
         return this->get_jacobian(body_name) * v;
     }
 
+    // --- Simulation Setters ---
+
     void Simulation::set_joint_positions(const Eigen::VectorXd &q) const {
-        assert(q.size() == this->dof_);
+        if (q.size() != this->dof_) {
+            throw std::invalid_argument("set_joint_positions: Vector size does not match DOF");
+        }
+
         for (int i = 0; i < this->dof_; ++i) { data->qpos[i] = q[i]; }
         mj_forward(model, data);
     }

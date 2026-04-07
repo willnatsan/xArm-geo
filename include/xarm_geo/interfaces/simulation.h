@@ -1,7 +1,7 @@
 #pragma once
 
+#include <chrono>
 #include <string>
-#include <vector>
 
 #include <GLFW/glfw3.h>
 #include <mujoco/mjdata.h>
@@ -12,6 +12,10 @@
 
 namespace xarm_geo {
     class Simulation {
+
+    private:
+        std::chrono::nanoseconds last_read_time_{0};
+
     public:
         // --- MuJoCo Configuration Struct ---
 
@@ -47,30 +51,29 @@ namespace xarm_geo {
         explicit Simulation(const std::string &mjcf_file);
         Simulation(const std::string &mjcf_file, const Config &config);
         ~Simulation();
-
-        auto initialised() -> bool;
-        void shutdown();
         void reset() const;
+
         [[nodiscard]] auto is_running() const -> bool;
+        void shutdown();
 
         // --- Concept: Observable (READ) ---
 
-        void read(JointPosition &pos) const;
-        void read(JointVelocity &vel) const;
-        void read(JointTorque &tau) const;
+        auto read(JointPosition &pos) -> InterfaceStatus;
+        auto read(JointVelocity &vel) -> InterfaceStatus;
+        auto read(JointTorque &torque) -> InterfaceStatus;
+        [[nodiscard]] auto read_time() const -> std::chrono::nanoseconds { return last_read_time_; }
 
         // --- Concept: Controllable (WRITE) ---
 
-        // void write(const JointPosition &pos);
-        void write(const JointVelocity &vel);
-        // void write(const JointTorque &tau);
+        auto write(const JointVelocity &vel) -> InterfaceStatus;
+        // auto write(const JointTorque &tau) -> InterfaceStatus;
 
         // --- Simulation Stepping ---
 
         void step();
         void step(int n_steps);
 
-        // --- Simulation Helpers ---
+        // --- Simulation Getters ---
 
         [[nodiscard]] auto get_timestep() const -> double { return model->opt.timestep; }
         [[nodiscard]] auto get_time() const -> double { return data->time; }
@@ -84,6 +87,7 @@ namespace xarm_geo {
         [[nodiscard]] auto get_twist(const std::string &body_name, const Eigen::VectorXd &v) const
             -> manifold::SE3::Twist;
 
+        // --- Simulation Setters ---
         void set_joint_positions(const Eigen::VectorXd &q) const;
 
         // --- Rendering & Visualisation ---

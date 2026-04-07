@@ -1,13 +1,13 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <coal/collision_data.h>
 #include <coal/collision_object.h>
 #include <coal/shape/geometric_shapes.h>
 
-#include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/system.h>
 #include <xarm_geo_config.h>
 

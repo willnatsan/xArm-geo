@@ -1,4 +1,7 @@
+#include <algorithm>
+#include <numbers>
 #include <random>
+
 #include <xarm_geo/modelling/kinematics.h>
 
 namespace xarm_geo {
@@ -96,7 +99,7 @@ namespace xarm_geo {
         // Setup Random Number Generator for Subsequent Attempts
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_real_distribution<> dis(-M_PI, M_PI);
+        std::uniform_real_distribution<> dis(-std::numbers::pi, std::numbers::pi);
 
         for (int attempt = 0; attempt < options.max_restarts; ++attempt) {
             data.q_out = data.q_guess;
@@ -119,8 +122,10 @@ namespace xarm_geo {
                 // Wrap & Clamp Joints
                 for (int i = 0; i < model.dof; ++i) {
                     // 1. Wrap joint angles to [-pi, pi]
-                    while (data.q_out[i] > M_PI) data.q_out[i] -= 2.0 * M_PI;
-                    while (data.q_out[i] < -M_PI) data.q_out[i] += 2.0 * M_PI;
+                    while (data.q_out[i] > std::numbers::pi)
+                        data.q_out[i] -= 2.0 * std::numbers::pi;
+                    while (data.q_out[i] < -std::numbers::pi)
+                        data.q_out[i] += 2.0 * std::numbers::pi;
 
                     // 2. Clamp joint to specified joint limits
                     data.q_out[i] = std::max(model.limits[i].q_min,

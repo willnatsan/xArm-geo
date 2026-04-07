@@ -1,5 +1,6 @@
 #pragma once
 
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -10,9 +11,9 @@ namespace xarm_geo {
     // --- Joint Position & Velocity Limits ---
 
     struct JointLimits {
-        double q_min = -2 * M_PI;
-        double q_max = 2 * M_PI;
-        double q_vel_max = M_PI;
+        double q_min = -2 * std::numbers::pi;
+        double q_max = 2 * std::numbers::pi;
+        double q_vel_max = std::numbers::pi;
     };
 
     // --- Immutable Model Data ---

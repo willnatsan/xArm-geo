@@ -1,8 +1,8 @@
 #include <chrono>
-#include <cmath>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <numbers>
 #include <thread>
 
 #include <xarm_geo/core/manifold.h>
@@ -25,7 +25,7 @@ auto generate_trajectory(int trajectory_mode, double t) -> TrajectoryState {
     double z_c = 0.30;
 
     double roll_target = 0.0;
-    double pitch_target = M_PI;  // BASELINE: Pointing straight down
+    double pitch_target = std::numbers::pi;  // BASELINE: Pointing straight down
     double yaw_target = 0.0;
     Eigen::Vector3d target_pos;
 
@@ -40,7 +40,7 @@ auto generate_trajectory(int trajectory_mode, double t) -> TrajectoryState {
 
         target_pos << x_c + x_fig8, y_c + y_fig8, z_c + z_bob;
         roll_target = 0.5 * std::sin(2.0 * omega * t);
-        pitch_target = M_PI + 0.3 * std::cos(omega * t);
+        pitch_target = std::numbers::pi + 0.3 * std::cos(omega * t);
         yaw_target = 0.8 * std::sin(omega * t);
 
     } else if (trajectory_mode == 1) {
@@ -56,7 +56,7 @@ auto generate_trajectory(int trajectory_mode, double t) -> TrajectoryState {
 
         target_pos << x_c + x_wing, y_c + y_wing, z_c + z_wing;
         roll_target = std::atan(2.0 * curvature * y_wing);
-        pitch_target = M_PI;
+        pitch_target = std::numbers::pi;
         yaw_target = 0.0;
 
     } else if (trajectory_mode == 2) {
@@ -68,7 +68,7 @@ auto generate_trajectory(int trajectory_mode, double t) -> TrajectoryState {
         double tilt = 0.0;
         if (t > transition_start) {
             double progress = (t - transition_start) / transition_duration;
-            tilt = std::min(progress, 1.0) * (M_PI / 2.0);
+            tilt = std::min(progress, 1.0) * (std::numbers::pi / 2.0);
         }
 
         Eigen::Vector3d p_base(R * std::cos(omega * t), R * std::sin(omega * t), 0.0);
@@ -77,7 +77,7 @@ auto generate_trajectory(int trajectory_mode, double t) -> TrajectoryState {
         target_pos = Eigen::Vector3d(x_c, y_c, z_c) + R_tilt * p_base;
 
         roll_target = 0.0;
-        pitch_target = M_PI - tilt;
+        pitch_target = std::numbers::pi - tilt;
         yaw_target = 0.0;
     }
 
@@ -85,10 +85,25 @@ auto generate_trajectory(int trajectory_mode, double t) -> TrajectoryState {
     Eigen::AngleAxisd rollAngle(roll_target, Eigen::Vector3d::UnitX());
     Eigen::AngleAxisd pitchAngle(pitch_target, Eigen::Vector3d::UnitY());
     Eigen::AngleAxisd yawAngle(yaw_target, Eigen::Vector3d::UnitZ());
+
     Eigen::Quaterniond target_quat = yawAngle * pitchAngle * rollAngle;
     xarm_geo::manifold::SE3 target_pose(xarm_geo::manifold::SO3(target_quat), target_pos);
 
-    return {target_pose, target_pos, roll_target, pitch_target, yaw_target};
+    // Extract Target Euler Angles to Prevent Alias Fighting
+    Eigen::Matrix3d R_target = target_quat.toRotationMatrix();
+    double target_pitch_ext = std::asin(std::clamp(-R_target(2, 0), -1.0, 1.0));
+    double target_yaw_ext;
+    double target_roll_ext;
+
+    if (std::abs(std::cos(target_pitch_ext)) > 1e-6) {
+        target_yaw_ext = std::atan2(R_target(1, 0), R_target(0, 0));
+        target_roll_ext = std::atan2(R_target(2, 1), R_target(2, 2));
+    } else {
+        target_yaw_ext = 0.0;
+        target_roll_ext = std::atan2(-R_target(0, 1), R_target(1, 1));
+    }
+
+    return {target_pose, target_pos, target_roll_ext, target_pitch_ext, target_yaw_ext};
 }
 
 auto main(int argc, char *argv[]) -> int {
@@ -96,22 +111,27 @@ auto main(int argc, char *argv[]) -> int {
     bool use_geometric_controller = true;
     int trajectory_mode = 2;
     bool show_marker = true;
+    bool log_data = false;
 
     // --- COMMAND LINE ARGUMENT PARSING ---
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
 
         if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: " << argv[0] << " [options]\n"
-                      << "Options:\n"
-                      << "  --geometric <0|1>    Toggle Geometric Controller (default: 1)\n"
-                      << "  --trajectory <0|1|2> Select trajectory mode (default: 2)\n"
-                      << "                       0 = Flat 2D Circle\n"
-                      << "                       1 = Curved Wing Inspection\n"
-                      << "                       2 = Horizontal to Vertical Circle\n"
-                      << "  --marker <0|1>       Show target marker in simulation (default: 1)\n";
+            std::cout
+                << "Usage: " << argv[0] << " [options]\n"
+                << "Options:\n"
+                << "  --geometric <false|true> -> Toggle Geometric Controller (default: true)\n"
+                << "  --trajectory <0|1|2> -> Select trajectory mode (default: 2)\n"
+                << "                       0 = Flat 2D Circle\n"
+                << "                       1 = Curved Wing Inspection\n"
+                << "                       2 = Horizontal to Vertical Circle\n"
+                << "  --marker <false|true> -> Show target marker in simulation (default: true)\n"
+                << "  --log <false|true> -> Log data to CSV file (default: false)\n";
             return 0;
-        } else if (arg == "--geometric") {
+        }
+
+        if (arg == "--geometric") {
             if (i + 1 < argc) {
                 std::string val = argv[++i];
                 use_geometric_controller = (val == "1" || val == "true");
@@ -130,17 +150,17 @@ auto main(int argc, char *argv[]) -> int {
                 std::string val = argv[++i];
                 show_marker = (val == "1" || val == "true");
             }
+        } else if (arg == "--log") {
+            if (i + 1 < argc) {
+                std::string val = argv[++i];
+                log_data = (val == "1" || val == "true");
+            }
         }
     }
 
     xarm_geo::Model model = xarm_geo::build_model(6, "XI130412C23L45");
     xarm_geo::Data data(model);
-
     xarm_geo::Simulation sim(model.mjcf_file);
-    if (!sim.initialised()) {
-        std::cerr << "Failed to initialise MuJoCo simulation!\n";
-        return -1;
-    }
 
     xarm_geo::JointPosition pos_curr(model.dof);
     xarm_geo::JointVelocity vel_target(model.dof);
@@ -153,7 +173,10 @@ auto main(int argc, char *argv[]) -> int {
     // --- SET INITIAL CONFIGURATION (TRAJECTORY START) ---
     TrajectoryState initial = generate_trajectory(trajectory_mode, t);
 
-    sim.read(pos_curr);
+    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) {
+        std::cerr << "Error: Failed to read Initial Joint Positions.\n";
+        return 1;
+    }
     bool ik_success = xarm_geo::inverse_kinematics(model, data, pos_curr.q, initial.pose);
     if (!ik_success) {
         std::cerr << "IK FAILED\n";
@@ -171,10 +194,14 @@ auto main(int argc, char *argv[]) -> int {
     std::cout << "Starting Simulation.\n"
               << "  Geometric Mode: " << (use_geometric_controller ? "ON" : "OFF") << "\n"
               << "  Trajectory: " << trajectory_mode << "\n"
-              << "  Marker: " << (show_marker ? "ON" : "OFF") << "\n";
+              << "  Marker: " << (show_marker ? "ON" : "OFF") << "\n"
+              << "  Data Logging: " << (log_data ? "ON" : "OFF") << "\n";
 
     while (t < 20.0 && sim.is_running()) {
-        sim.read(pos_curr);
+        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) {
+            std::cerr << "Error: Failed to read Current Joint Positions. Halting Loop.\n";
+            break;
+        }
         xarm_geo::compute_jacobians(model, data, pos_curr.q);
 
         // Generate trajectory for current time t
@@ -192,48 +219,86 @@ auto main(int argc, char *argv[]) -> int {
             cmd_twist.tail<3>() = kp * twist_err_body.tail<3>();
 
         } else {
-            // NAIVE NON-GEOMETRIC APPROACH:
+            // NON-GEOMETRIC APPROACH:
             Eigen::Vector3d pos_err_space = target.pos - data.ee_pose.r3();
 
-            Eigen::Vector3d curr_euler =
-                data.ee_pose.so3().quat().toRotationMatrix().eulerAngles(2, 1, 0);
-            Eigen::Vector3d target_euler(target.yaw, target.pitch, target.roll);
+            // ROBUST EULER EXTRACTION (ZYX / Yaw-Pitch-Roll)
+            Eigen::Matrix3d R_curr = data.ee_pose.so3().matrix();
 
-            Eigen::Vector3d rot_err_space = target_euler - curr_euler;
+            double curr_pitch = std::asin(std::clamp(-R_curr(2, 0), -1.0, 1.0));
+            double curr_yaw;
+            double curr_roll;
 
-            for (int i = 0; i < 3; ++i) {
-                while (rot_err_space[i] > M_PI) rot_err_space[i] -= 2.0 * M_PI;
-                while (rot_err_space[i] < -M_PI) rot_err_space[i] += 2.0 * M_PI;
+            // Check for gimbal lock
+            if (std::abs(std::cos(curr_pitch)) > 1e-6) {
+                curr_yaw = std::atan2(R_curr(1, 0), R_curr(0, 0));
+                curr_roll = std::atan2(R_curr(2, 1), R_curr(2, 2));
+            } else {
+                curr_yaw = 0.0;
+                curr_roll = std::atan2(-R_curr(0, 1), R_curr(1, 1));
             }
 
-            Eigen::Matrix3d Rt = data.ee_pose.so3().matrix().transpose();
+            Eigen::Vector3d curr_euler(curr_yaw, curr_pitch, curr_roll);
+            Eigen::Vector3d target_euler(target.yaw, target.pitch, target.roll);
 
-            cmd_twist.head<3>() = Rt * (kp * pos_err_space);
-            cmd_twist.tail<3>() = Rt * (kp * rot_err_space);
+            // ERROR AND CONTINUOUS WRAPPING
+            Eigen::Vector3d rot_err_space = target_euler - curr_euler;
+            for (int i = 0; i < 3; ++i) {
+                while (rot_err_space[i] > std::numbers::pi)
+                    rot_err_space[i] -= 2.0 * std::numbers::pi;
+                while (rot_err_space[i] < -std::numbers::pi)
+                    rot_err_space[i] += 2.0 * std::numbers::pi;
+            }
+
+            // MAP EULER RATES TO SPACE ANGULAR VELOCITY
+            double d_yaw = kp * rot_err_space[0];
+            double d_pitch = kp * rot_err_space[1];
+            double d_roll = kp * rot_err_space[2];
+
+            // Map the rates through the ZYX rotation axes to get omega in the space frame
+            Eigen::Vector3d omega_space =
+                Eigen::Vector3d::UnitZ() * d_yaw +
+                Eigen::AngleAxisd(curr_yaw, Eigen::Vector3d::UnitZ()) *
+                    (Eigen::Vector3d::UnitY() * d_pitch) +
+                Eigen::AngleAxisd(curr_yaw, Eigen::Vector3d::UnitZ()) *
+                    Eigen::AngleAxisd(curr_pitch, Eigen::Vector3d::UnitY()) *
+                    (Eigen::Vector3d::UnitX() * d_roll);
+
+            // TRANSFORM TO BODY FRAME TWIST
+            // The IK solver expects a body twist, so we rotate space vectors back to the body
+            Eigen::Matrix3d Rt = R_curr.transpose();
+
+            cmd_twist.head<3>() = Rt * (kp * pos_err_space);  // Body linear velocity
+            cmd_twist.tail<3>() = Rt * omega_space;           // Body angular velocity
         }
 
         // --- WRITE ---
         xarm_geo::inverse_diff_kinematics(model, data, cmd_twist);
         vel_target.v = data.v_out;
-        sim.write(vel_target);
+        if (sim.write(vel_target) != xarm_geo::InterfaceStatus::OK) {
+            std::cerr << "Error: Failed to send Joint Velocity Commands. Halting Loop.\n";
+            break;
+        }
 
         // --- LOG DATA TO CSV ---
-        Eigen::Vector3d actual_euler =
-            data.ee_pose.so3().quat().toRotationMatrix().eulerAngles(2, 1, 0);
+        if (log_data) {
+            Eigen::Vector3d actual_euler =
+                data.ee_pose.so3().quat().toRotationMatrix().eulerAngles(2, 1, 0);
 
-        log_file << t << "," << target.pos.x() << "," << target.pos.y() << "," << target.pos.z()
-                 << "," << data.ee_pose.r3().x() << "," << data.ee_pose.r3().y() << ","
-                 << data.ee_pose.r3().z() << "," << target.roll << "," << target.pitch << ","
-                 << target.yaw << "," << actual_euler[2] << "," << actual_euler[1] << ","
-                 << actual_euler[0] << "\n";
+            log_file << t << "," << target.pos.x() << "," << target.pos.y() << "," << target.pos.z()
+                     << "," << data.ee_pose.r3().x() << "," << data.ee_pose.r3().y() << ","
+                     << data.ee_pose.r3().z() << "," << target.roll << "," << target.pitch << ","
+                     << target.yaw << "," << actual_euler[2] << "," << actual_euler[1] << ","
+                     << actual_euler[0] << "\n";
+        }
 
         // --- STEP PHYSICS & RENDER ---
         sim.step();
+
         t += physics_dt;
 
         if (t - last_render_t >= render_dt) {
             if (show_marker) { sim.set_marker(target.pose); }
-
             sim.update_scene();
             sim.render();
             last_render_t = t;

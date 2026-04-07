@@ -1,4 +1,5 @@
 #include <iostream>
+#include <string>
 
 #include <xarm_geo/utils/model_config.h>
 

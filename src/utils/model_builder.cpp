@@ -1,4 +1,5 @@
 #include <iostream>
+#include <numbers>
 
 #include <coal/mesh_loader/loader.h>
 #include <coal/serialization/BVH_model.h>
@@ -163,9 +164,9 @@ namespace xarm_geo::internal {
             }
 
             xarm_geo::JointLimits limits_curr;
-            limits_curr.q_min = limit->DoubleAttribute("lower", -2 * M_PI);
-            limits_curr.q_max = limit->DoubleAttribute("upper", 2 * M_PI);
-            limits_curr.q_vel_max = limit->DoubleAttribute("velocity", M_PI);
+            limits_curr.q_min = limit->DoubleAttribute("lower", -2 * std::numbers::pi);
+            limits_curr.q_max = limit->DoubleAttribute("upper", 2 * std::numbers::pi);
+            limits_curr.q_vel_max = limit->DoubleAttribute("velocity", std::numbers::pi);
             model.limits.push_back(limits_curr);
 
             const tinyxml2::XMLElement *child_link = child->FirstChildElement("child");

@@ -13,18 +13,10 @@
 #include <xarm_geo/interfaces/interface.h>
 
 namespace xarm_geo {
+
     enum class ControlMode : std::uint8_t { VELOCITY, TORQUE };
 
     class Simulation {
-
-    private:
-        std::chrono::nanoseconds last_read_time_{0};
-        ControlMode current_mode_ = ControlMode::VELOCITY;
-
-        // Caches for Actuator Parameters -> Needed for Actuator Switching
-        std::vector<double> kv_gains_;
-        std::vector<double> force_limits_;
-        std::vector<double> vel_limits_;
 
     public:
         // --- MuJoCo Configuration Struct ---
@@ -90,6 +82,7 @@ namespace xarm_geo {
         [[nodiscard]] auto get_time() const -> double { return data->time; }
         [[nodiscard]] auto get_dof() const -> int { return dof_; }
 
+        [[nodiscard]] auto get_body_id(const std::string &body_name) const -> int;
         [[nodiscard]] auto get_pose(const std::string &body_name = "") const -> manifold::SE3;
         [[nodiscard]] auto get_pose(int body_id) const -> manifold::SE3;
         [[nodiscard]] auto get_pose_tree() const -> std::vector<manifold::SE3>;
@@ -115,16 +108,22 @@ namespace xarm_geo {
         int dof_;
         int marker_id_ = -1;
         bool is_shutdown_ = false;
+        std::chrono::nanoseconds last_read_time_{0};
+        ControlMode current_mode_ = ControlMode::VELOCITY;
 
+        // Caches for Actuator Parameters -> Needed for Actuator Switching
+        std::vector<double> kv_gains_;
+        std::vector<double> force_limits_;
+        std::vector<double> vel_limits_;
+
+        // MuJoCo GUI Parameters
         GLFWwindow *window_ = nullptr;
         mjvCamera camera_{};
         mjvOption option_{};
         mjvScene scene_{};
         mjrContext context_{};
 
-        [[nodiscard]] auto get_body_id(const std::string &body_name) const -> int;
-
-        // --- GLFW Mouse Callbacks ---
+        // --- GLFW Mouse Callbacks (Must be STATIC) ---
 
         static void mouse_button_callback(GLFWwindow *window, int button, int action, int mods);
         static void mouse_move_callback(GLFWwindow *window, double x_pos, double y_pos);

@@ -5,7 +5,7 @@
 
 namespace xarm_geo {
 
-    // --- Global Variables ---
+    // --- Global Variables (for STATIC Mouse Callbacks) ---
 
     static bool g_button_left = false;
     static bool g_button_middle = false;
@@ -149,7 +149,10 @@ namespace xarm_geo {
     // --- Concept: Observable (READ) ---
 
     auto Simulation::read(JointPosition &pos) -> InterfaceStatus {
-        if (this->is_shutdown_ || pos.q.size() != this->dof_) { return InterfaceStatus::ERROR; };
+        if (this->is_shutdown_ || !this->data) { return InterfaceStatus::ERROR; };
+
+        // Resize Output Variable if Needed
+        if (pos.q.size() != this->dof_) { pos.q.resize(this->dof_); }
 
         pos.q = Eigen::Map<const Eigen::VectorXd>(this->data->qpos, this->dof_);
         this->last_read_time_ =
@@ -159,7 +162,10 @@ namespace xarm_geo {
     }
 
     auto Simulation::read(JointVelocity &vel) -> InterfaceStatus {
-        if (this->is_shutdown_ || vel.v.size() != this->dof_) { return InterfaceStatus::ERROR; };
+        if (this->is_shutdown_ || !this->data) { return InterfaceStatus::ERROR; };
+
+        // Resize Output Variable if Needed
+        if (vel.v.size() != this->dof_) { vel.v.resize(this->dof_); }
 
         vel.v = Eigen::Map<const Eigen::VectorXd>(this->data->qvel, this->dof_);
         this->last_read_time_ =
@@ -169,9 +175,10 @@ namespace xarm_geo {
     }
 
     auto Simulation::read(JointTorque &torque) -> InterfaceStatus {
-        if (this->is_shutdown_ || torque.tau.size() != this->dof_) {
-            return InterfaceStatus::ERROR;
-        };
+        if (this->is_shutdown_ || !this->data) { return InterfaceStatus::ERROR; };
+
+        // Resize Output Variable if Needed
+        if (torque.tau.size() != this->dof_) { torque.tau.resize(this->dof_); }
 
         torque.tau = Eigen::Map<const Eigen::VectorXd>(this->data->qfrc_actuator, this->dof_);
         this->last_read_time_ =

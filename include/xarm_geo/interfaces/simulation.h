@@ -48,12 +48,13 @@ namespace xarm_geo {
         mjModel *model = nullptr;
         mjData *data = nullptr;
 
-        // --- Lifecycle Management ---
+        // --- Constructors & Destructors ---
 
         explicit Simulation(const std::string &mjcf_file);
         Simulation(const std::string &mjcf_file, const Config &config);
         ~Simulation();
-        void reset() const;
+
+        // --- Concept: Lifecycle Management ---
 
         [[nodiscard]] auto is_running() const -> bool;
         void shutdown();
@@ -92,7 +93,9 @@ namespace xarm_geo {
             -> manifold::SE3::Twist;
 
         // --- Simulation Setters ---
+
         void set_joint_positions(const Eigen::VectorXd &q) const;
+        void reset() const;
 
         // --- Rendering & Visualisation ---
 
@@ -129,4 +132,12 @@ namespace xarm_geo {
         static void mouse_move_callback(GLFWwindow *window, double x_pos, double y_pos);
         static void scroll_callback(GLFWwindow *window, double x_offset, double y_offset);
     };
+
+    // --- Compile-Time Concept Verifications ---
+    static_assert(Interface<Simulation>);
+    static_assert(Observable<Simulation, JointPosition>);
+    static_assert(Observable<Simulation, JointVelocity>);
+    static_assert(Observable<Simulation, JointTorque>);
+    static_assert(Controllable<Simulation, JointVelocity>);
+    static_assert(Controllable<Simulation, JointTorque>);
 }  // namespace xarm_geo

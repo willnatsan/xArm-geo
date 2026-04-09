@@ -25,9 +25,18 @@ namespace xarm_geo {
         explicit JointTorque(int dof) : tau(Eigen::VectorXd::Zero(dof)) {}
     };
 
+    struct JointState {
+        Eigen::VectorXd q;
+        Eigen::VectorXd v;
+        Eigen::VectorXd tau;
+        explicit JointState(int dof)
+            : q(Eigen::VectorXd::Zero(dof)), v(Eigen::VectorXd::Zero(dof)),
+              tau(Eigen::VectorXd::Zero(dof)) {}
+    };
+
     // --- Hardware / Simulation Concepts ---
 
-    // Base Lifecycle Requirements
+    // Base Interface Requirements
     // Note: No Dedicated `init()` Method -> Assuming RAII (Initialisation in Constructor)
     template <typename T>
     concept Interface = requires(T interface) {

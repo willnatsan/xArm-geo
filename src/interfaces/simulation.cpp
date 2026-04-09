@@ -15,7 +15,7 @@ namespace xarm_geo {
     static double g_last_x = 0;
     static double g_last_y = 0;
 
-    // --- Lifecycle Management ---
+    // --- Constructors & Destructors ---
 
     Simulation::Simulation(const std::string &mjcf_file) : Simulation(mjcf_file, Config{}) {}
 
@@ -108,12 +108,9 @@ namespace xarm_geo {
         glfwSetScrollCallback(this->window_, scroll_callback);
     }
 
-    Simulation::~Simulation() { shutdown(); }
+    Simulation::~Simulation() { this->shutdown(); }
 
-    void Simulation::reset() const {
-        Eigen::Map<Eigen::VectorXd>(this->data->qvel, this->dof_).setZero();
-        Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
-    }
+    // --- Concept: Lifecycle Management ---
 
     auto Simulation::is_running() const -> bool {
         if (this->is_shutdown_) return false;
@@ -125,7 +122,7 @@ namespace xarm_geo {
     }
 
     void Simulation::shutdown() {
-        if (is_shutdown_) return;
+        if (this->is_shutdown_) return;
 
         if (this->window_) {
             glfwDestroyWindow(this->window_);
@@ -319,6 +316,11 @@ namespace xarm_geo {
 
         for (int i = 0; i < this->dof_; ++i) { data->qpos[i] = q[i]; }
         mj_forward(model, data);
+    }
+
+    void Simulation::reset() const {
+        Eigen::Map<Eigen::VectorXd>(this->data->qvel, this->dof_).setZero();
+        Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
     }
 
     // --- Rendering & Visualisation ---

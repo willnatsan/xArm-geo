@@ -1,5 +1,7 @@
 #include <stdexcept>
 
+#include <mujoco/mjmodel.h>
+
 #include <xarm_geo/interfaces/simulation.h>
 #include <xarm_geo_config.h>
 
@@ -214,6 +216,9 @@ namespace xarm_geo {
 
         for (int i = 0; i < this->model->nu; ++i) {
             if (mode == ControlMode::VELOCITY) {
+                // Set to Affine Bias Type
+                this->model->actuator_biastype[i] = mjBIAS_AFFINE;
+
                 // Restore Velocity Mode: F = kv * ctrl - kv * vel
                 this->model->actuator_gainprm[(i * mjNGAIN) + 0] = this->kv_gains_[i];
                 this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
@@ -224,6 +229,9 @@ namespace xarm_geo {
                 this->model->actuator_ctrlrange[(i * 2) + 1] = this->vel_limits_[i];
 
             } else if (mode == ControlMode::TORQUE) {
+                // Set to None Bias Type
+                this->model->actuator_biastype[i] = mjBIAS_NONE;
+
                 // Switch to Torque Mode: F = 1.0 * ctrl
                 this->model->actuator_gainprm[(i * mjNGAIN) + 0] = 1.0;
                 this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;

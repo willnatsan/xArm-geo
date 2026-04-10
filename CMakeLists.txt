@@ -163,20 +163,19 @@ if(BUILD_WITH_MUJOCO)
 endif()
 
 if(BUILD_WITH_REAL_XARM)
-    target_link_libraries(${PROJECT_NAME} PRIVATE xarm)
+    target_link_libraries(${PROJECT_NAME} PUBLIC xarm)
 endif()
 
 add_dependencies(${PROJECT_NAME} ${GENERATOR_TARGET_NAME})
 
 # --- Executables / Tests ---
-#
-# add_executable(debug tests/debug.cpp)
-# target_link_libraries(debug PRIVATE ${PROJECT_NAME})
-#
-# add_executable(basic_test tests/basic_test.cpp)
-# target_link_libraries(basic_test PRIVATE ${PROJECT_NAME})
 
 if(BUILD_WITH_MUJOCO)
     add_executable(simulation tests/simulation_test.cpp)
     target_link_libraries(simulation PRIVATE ${PROJECT_NAME})
+endif()
+
+if (BUILD_WITH_REAL_XARM)
+    add_executable(hardware tests/hardware_test.cpp)
+    target_link_libraries(hardware PRIVATE ${PROJECT_NAME})
 endif()

@@ -72,7 +72,7 @@ auto main(int argc, char *argv[]) -> int {
             auto now = std::chrono::steady_clock::now();
             double t = std::chrono::duration<double>(now - start_time).count();
 
-            if (t > 4.0) break;  // Run for 4 seconds
+            if (t > 6.0) break;  // Run for 6 seconds
 
             // Generate a gentle sine wave on Joint 0.
             // Amplitude: 0.05 rad/s. Period: 4 seconds.

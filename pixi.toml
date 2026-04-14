@@ -91,6 +91,7 @@ build_asan = { depends-on = [
 clean = "cmake -E rm -rf build"
 
 # Executable Shortcuts
+hw = { cmd = "./build/hardware", depends-on = ["build"] }
 sim = { cmd = "./build/simulation", depends-on = ["build"] }
 
 # --- Separate Environment for Code Quality ---

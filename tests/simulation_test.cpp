@@ -5,7 +5,6 @@
 #include <numbers>
 #include <thread>
 
-#include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/interfaces/simulation.h>
 #include <xarm_geo/modelling/kinematics.h>

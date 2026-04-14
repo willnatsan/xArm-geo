@@ -4,7 +4,9 @@
 #include <numbers>
 #include <thread>
 
+#include <xarm_geo/core/system.h>
 #include <xarm_geo/interfaces/hardware.h>
+#include <xarm_geo/utils/model_builder.h>
 
 auto main(int argc, char *argv[]) -> int {
     if (argc < 2) {
@@ -13,14 +15,15 @@ auto main(int argc, char *argv[]) -> int {
     }
 
     std::string robot_ip = argv[1];
-    int dof = 6;
+    xarm_geo::Model model = xarm_geo::build_model(6, "XI130412C23L45");
+    xarm_geo::Data data(model);
 
     std::cout << "--- Starting Safe Hardware Evaluation ---\n";
 
     try {
         // 1. Initialize Hardware
         std::cout << "Connecting to xArm at " << robot_ip << "...\n";
-        xarm_geo::Hardware hw(dof, robot_ip);
+        xarm_geo::Hardware hw(model.dof, robot_ip);
 
         if (!hw.is_running()) {
             std::cerr << "[ERROR] Hardware Connected BUT Reported an Error State.\n";
@@ -28,8 +31,8 @@ auto main(int argc, char *argv[]) -> int {
         }
         std::cout << "Connection Successful!\n";
 
-        xarm_geo::JointState state(dof);
-        xarm_geo::JointVelocity cmd(dof);
+        xarm_geo::JointState state(model.dof);
+        xarm_geo::JointVelocity cmd(model.dof);
 
         // Passive Read Test (2 Seconds)
         std::cout << "\nPassive Read Test (2 seconds)...\n";
@@ -47,7 +50,7 @@ auto main(int argc, char *argv[]) -> int {
         // Tests the write functionality without actually moving the robot.
         std::cout << "\nZero-Velocity Hold Test (2 seconds)...\n";
         for (int i = 0; i < 20; ++i) {
-            for (int j = 0; j < dof; ++j) { cmd.v[j] = 0.0; }  // Ensure strict zeroes
+            for (int j = 0; j < model.dof; ++j) { cmd.v[j] = 0.0; }  // Ensure strict zeroes
 
             if (hw.write(cmd) != xarm_geo::InterfaceStatus::OK) {
                 std::cerr << "[ERROR] Failed to write Zero Velocity Command!\n";
@@ -73,7 +76,7 @@ auto main(int argc, char *argv[]) -> int {
 
             // Generate a gentle sine wave on Joint 0.
             // Amplitude: 0.05 rad/s. Period: 4 seconds.
-            for (int j = 0; j < dof; ++j) { cmd.v[j] = 0.0; }
+            for (int j = 0; j < model.dof; ++j) { cmd.v[j] = 0.0; }
             cmd.v[0] = 0.05 * std::sin(2.0 * std::numbers::pi * t / 4.0);
 
             if (hw.write(cmd) != xarm_geo::InterfaceStatus::OK) {
@@ -86,7 +89,7 @@ auto main(int argc, char *argv[]) -> int {
 
         // Final Safety Shutdown
         std::cout << "\nStopping Robot...\n";
-        for (int j = 0; j < dof; ++j) { cmd.v[j] = 0.0; }
+        for (int j = 0; j < model.dof; ++j) { cmd.v[j] = 0.0; }
         hw.write(cmd);
 
         hw.shutdown();

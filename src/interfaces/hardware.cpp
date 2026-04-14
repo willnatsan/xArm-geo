@@ -23,6 +23,9 @@ namespace xarm_geo {
         // Set xArm State & Control Mode to Joint Velocity Control
         this->arm->set_mode(4);
         this->arm->set_state(0);
+
+        // Flush Velocity Command Buffer
+        this->stop();
     }
 
     Hardware::~Hardware() { this->shutdown(); }
@@ -34,8 +37,9 @@ namespace xarm_geo {
     }
 
     void Hardware::shutdown() {
+        this->stop();
+
         if (this->arm && this->arm->is_connected()) {
-            this->arm->motion_enable(false);
             this->arm->disconnect();
         }
     }
@@ -79,5 +83,23 @@ namespace xarm_geo {
         int res = this->arm->vc_set_joint_velocity(vel);
 
         return (res == 0) ? InterfaceStatus::OK : InterfaceStatus::ERROR;
+    }
+
+    // --- Additional Utility Methods ---
+
+    void Hardware::stop() {
+        if (this->arm && this->arm->is_connected()) {
+            float zero_vel[7] = {0.0F};
+            this->arm->vc_set_joint_velocity(zero_vel);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+    }
+
+    void Hardware::disable_motors() {
+        this->stop();
+
+        if (this->arm && this->arm->is_connected()) {
+            this->arm->motion_enable(false);
+        }
     }
 }  // namespace xarm_geo

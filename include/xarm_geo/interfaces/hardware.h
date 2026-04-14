@@ -27,6 +27,10 @@ namespace xarm_geo {
         // --- Concept: Controllable (WRITE) ---
         auto write(const JointVelocity &cmd) -> InterfaceStatus;
 
+        // --- Additional Utility Methods ---
+        void stop();
+        void disable_motors();
+
     private:
         int dof_;
         std::chrono::nanoseconds last_read_time_{0};

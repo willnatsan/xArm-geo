@@ -20,7 +20,7 @@ find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 FetchContent_Declare(
   smooth
   GIT_REPOSITORY https://github.com/pettni/smooth.git
-  GIT_TAG v1.1.0
+  GIT_TAG 08c5d55
 )
 FetchContent_MakeAvailable(smooth)
 
@@ -125,6 +125,8 @@ set(LIB_SOURCES
         src/modelling/collision.cpp
         src/modelling/dynamics.cpp
         src/modelling/kinematics.cpp
+        src/control/sample_controllers.cpp
+        src/trajectory/sample_trajectories.cpp
         src/utils/model_builder.cpp
         src/utils/model_config.cpp
         src/utils/parsing_utils.cpp

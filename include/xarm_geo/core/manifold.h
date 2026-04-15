@@ -4,6 +4,7 @@
 #include <smooth/lie_groups.hpp>
 #include <smooth/se3.hpp>
 #include <smooth/so3.hpp>
+#include <smooth/spline/bspline.hpp>
 
 namespace xarm_geo::manifold {
     using smooth::LieGroup;
@@ -67,6 +68,8 @@ namespace xarm_geo::manifold {
         using SpatialAcceleration = smooth::SE3d::Tangent;
         using Twist = smooth::SE3d::Tangent;
         using Wrench = CoTangent<smooth::SE3d>;
+
+        template <int Degree> using Spline = smooth::BSpline<Degree, SE3>;
     };
 
     // SO(3) Wrapper (3D Rotational Kinematics/Dynamics)
@@ -80,6 +83,8 @@ namespace xarm_geo::manifold {
         using RotAcceleration = smooth::SO3d::Tangent;
         using AngularVel = smooth::SO3d::Tangent;
         using Torque = CoTangent<smooth::SO3d>;
+
+        template <int Degree> using Spline = smooth::BSpline<Degree, SO3>;
     };
 
     // --- Geometric Transport Functions ---

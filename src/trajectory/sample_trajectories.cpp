@@ -10,24 +10,22 @@ namespace xarm_geo::trajectories {
     // --- Task Space Trajectories ---
 
     auto FigureEight::evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus {
-        // Local Lambda to Compute Pose at any given Time
         auto compute = [this](double time) -> manifold::SE3 {
-            Eigen::Vector3d pos(center_x + (size_x * std::sin(omega * time)),
-                                center_y + (size_y * std::sin(2.0 * omega * time)),
-                                center_z + (size_z * std::sin(omega * time)));
+            Eigen::Vector3d local_pos(size_x * std::sin(omega * time),
+                                      size_y * std::sin(2.0 * omega * time),
+                                      size_z * std::sin(omega * time));
 
-            Eigen::Quaterniond rot =
+            Eigen::Quaterniond local_rot =
                 Eigen::AngleAxisd(0.8 * std::sin(omega * time), Eigen::Vector3d::UnitZ()) *
                 Eigen::AngleAxisd(std::numbers::pi + (0.3 * std::cos(omega * time)),
-                                  Eigen::Vector3d::UnitY()) *
-                Eigen::AngleAxisd(0.5 * std::sin(2.0 * omega * time), Eigen::Vector3d::UnitX());
+                                  Eigen::Vector3d::UnitX()) *
+                Eigen::AngleAxisd(0.5 * std::sin(2.0 * omega * time), Eigen::Vector3d::UnitY());
 
-            return {manifold::SO3(rot), pos};
+            return anchor * manifold::SE3(manifold::SO3(local_rot), local_pos);
         };
 
         target.pose = compute(t);
 
-        // Numerical Differentiation for Feedforward Twist
         double dt = 0.001;
         manifold::SE3 pose_next = compute(t + dt);
         target.twist = (target.pose.inverse() * pose_next).log() / dt;
@@ -36,25 +34,23 @@ namespace xarm_geo::trajectories {
     }
 
     auto WingInspection::evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus {
-        // Local Lambda to Compute Pose at any given Time
         auto compute = [this](double time) -> manifold::SE3 {
-            double y_wing = sweep_amp * std::sin(omega_sweep * time);
-            double x_wing = scan_amp * std::cos(omega_scan * time);
-            double z_wing = -curvature * (y_wing * y_wing);
+            double x_wing = sweep_amp * std::sin(omega_sweep * time);
+            double y_wing = scan_amp * std::cos(omega_scan * time);
+            double z_wing = -curvature * (x_wing * x_wing);
 
-            Eigen::Vector3d pos(center_x + x_wing, center_y + y_wing, center_z + z_wing);
+            Eigen::Vector3d local_pos(x_wing, y_wing, z_wing);
 
-            Eigen::Quaterniond rot =
+            Eigen::Quaterniond local_rot =
                 Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ()) *
-                Eigen::AngleAxisd(std::numbers::pi, Eigen::Vector3d::UnitY()) *
-                Eigen::AngleAxisd(std::atan(2.0 * curvature * y_wing), Eigen::Vector3d::UnitX());
+                Eigen::AngleAxisd(std::atan(2.0 * curvature * x_wing), Eigen::Vector3d::UnitY()) *
+                Eigen::AngleAxisd(std::numbers::pi, Eigen::Vector3d::UnitX());
 
-            return {manifold::SO3(rot), pos};
+            return anchor * manifold::SE3(manifold::SO3(local_rot), local_pos);
         };
 
         target.pose = compute(t);
 
-        // Numerical Differentiation for Feedforward Twist
         double dt = 0.001;
         manifold::SE3 pose_next = compute(t + dt);
         target.twist = (target.pose.inverse() * pose_next).log() / dt;
@@ -63,7 +59,6 @@ namespace xarm_geo::trajectories {
     }
 
     auto TiltingCircle::evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus {
-        // Local Lambda to Compute Pose at any given Time
         auto compute = [this](double time) -> manifold::SE3 {
             double tilt = 0.0;
             if (time > transition_start) {
@@ -73,21 +68,19 @@ namespace xarm_geo::trajectories {
 
             Eigen::Vector3d p_base(R * std::cos(omega * time), R * std::sin(omega * time), 0.0);
             Eigen::Matrix3d R_tilt =
-                Eigen::AngleAxisd(tilt, Eigen::Vector3d::UnitY()).toRotationMatrix();
+                Eigen::AngleAxisd(tilt, Eigen::Vector3d::UnitX()).toRotationMatrix();
+            Eigen::Vector3d local_pos = R_tilt * p_base;
 
-            Eigen::Vector3d pos = Eigen::Vector3d(center_x, center_y, center_z) + R_tilt * p_base;
-
-            Eigen::Quaterniond rot =
+            Eigen::Quaterniond local_rot =
                 Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ()) *
-                Eigen::AngleAxisd(std::numbers::pi - tilt, Eigen::Vector3d::UnitY()) *
-                Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
+                Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
+                Eigen::AngleAxisd(std::numbers::pi - tilt, Eigen::Vector3d::UnitX());
 
-            return {manifold::SO3(rot), pos};
+            return anchor * manifold::SE3(manifold::SO3(local_rot), local_pos);
         };
 
         target.pose = compute(t);
 
-        // Numerical Differentiation for Feedforward Twist
         double dt = 0.001;
         manifold::SE3 pose_next = compute(t + dt);
         target.twist = (target.pose.inverse() * pose_next).log() / dt;
@@ -136,6 +129,11 @@ namespace xarm_geo::trajectories {
         }
 
         this->delta_q_ = q_end - this->q_start_;
+
+        // Normalise for Shortest Path [-pi, pi]
+        for (Eigen::Index i = 0; i < this->delta_q_.size(); ++i) {
+            this->delta_q_[i] = std::remainder(this->delta_q_[i], 2.0 * std::numbers::pi);
+        }
     }
 
     auto JointPTP::evaluate(double t, JointSpaceTarget &target) const -> TrajectoryStatus {
@@ -143,26 +141,26 @@ namespace xarm_geo::trajectories {
             return TrajectoryStatus::ERROR;
         }
 
-        if (duration_ <= 0.0) {
-            target.q = q_start_ + delta_q_;
+        if (this->duration_ <= 0.0) {
+            target.q = this->q_start_ + this->delta_q_;
             target.v.setZero();
             return TrajectoryStatus::OK;
         }
 
-        t = std::clamp(t, 0.0, duration_);
+        t = std::clamp(t, 0.0, this->duration_);
 
         // Minimum Jerk Polynomial Formulation
-        double tau = t / duration_;
+        double tau = t / this->duration_;
         double tau2 = tau * tau;
         double tau3 = tau2 * tau;
         double tau4 = tau3 * tau;
         double tau5 = tau4 * tau;
 
         double s = (10.0 * tau3) - (15.0 * tau4) + (6.0 * tau5);
-        double ds_dt = (30.0 * tau2 - 60.0 * tau3 + 30.0 * tau4) / duration_;
+        double ds_dt = (30.0 * tau2 - 60.0 * tau3 + 30.0 * tau4) / this->duration_;
 
-        target.q = q_start_ + (s * delta_q_);
-        target.v = ds_dt * delta_q_;
+        target.q = this->q_start_ + (s * this->delta_q_);
+        target.v = ds_dt * this->delta_q_;
 
         return TrajectoryStatus::OK;
     }

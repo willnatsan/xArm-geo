@@ -11,39 +11,37 @@ namespace xarm_geo::trajectories {
     // --- Task Space Trajectories ---
 
     struct FigureEight {
-        double center_x = 0.35;
-        double center_y = 0.0;
-        double center_z = 0.30;
+        manifold::SE3 anchor;
         double omega = 1.0;
         double size_x = 0.15;
         double size_y = 0.10;
         double size_z = 0.03;
 
+        explicit FigureEight(const manifold::SE3 &anchor) : anchor(anchor) {}
         [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
     };
 
     struct WingInspection {
-        double center_x = 0.35;
-        double center_y = 0.0;
-        double center_z = 0.30;
+        manifold::SE3 anchor;
         double omega_sweep = 0.5;
         double omega_scan = 2.0;
         double sweep_amp = 0.20;
         double scan_amp = 0.05;
         double curvature = 2.5;
 
+        explicit WingInspection(const manifold::SE3 &anchor) : anchor(anchor) {}
         [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
     };
 
     struct TiltingCircle {
-        double center_x = 0.35;
-        double center_y = 0.0;
-        double center_z = 0.30;
+        manifold::SE3 anchor;
         double omega = 2.0;
         double R = 0.12;
-        double transition_start = 8.0;
+        double transition_start = 7.5;
         double transition_duration = 1.0;
 
+        explicit TiltingCircle(const manifold::SE3 &anchor, double duration)
+            : anchor(anchor), transition_start(duration / 2) {}
         [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
     };
 

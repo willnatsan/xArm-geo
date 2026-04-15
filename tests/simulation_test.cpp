@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <numbers>
+#include <stdexcept>
 #include <thread>
 
 #include <xarm_geo/core/system.h>
@@ -10,86 +11,135 @@
 #include <xarm_geo/trajectory/sample_trajectories.h>
 #include <xarm_geo/utils/model_builder.h>
 
-template <xarm_geo::TaskSpaceTrajectory T>
-auto run_simulation(const T &trajectory, double duration, bool use_geometric_controller,
-                    int trajectory_mode, bool show_marker, bool log_data) -> int {
+struct TestParams {
+    bool geometric = true;
+    int trajectory_mode = 2;
+    bool show_marker = true;
+    bool log_data = false;
+};
 
-    xarm_geo::Model model = xarm_geo::build_model(6, "XI130412C23L45");
-    xarm_geo::Data data(model);
-    xarm_geo::Simulation sim(model.mjcf_file);
+auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::JointPTP &traj,
+                   double duration, xarm_geo::JointPosition &pos_curr,
+                   xarm_geo::JointVelocity &control_target) -> bool {
+
+    double t = 0.0;
+    double physics_dt = 0.002;
+    double render_dt = 1.0 / 60.0;
+    double last_render_t = 0.0;
+    double kp_joint = 5.0;
+
+    xarm_geo::JointSpaceTarget joint_target(pos_curr.q.size());
+
+    while (t < duration && sim.is_running()) {
+        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) return false;
+
+        if (traj.evaluate(t, joint_target) != xarm_geo::TrajectoryStatus::OK) return false;
+
+        for (size_t i = 0; i < control_target.v.size(); ++i) {
+            control_target.v[i] =
+                joint_target.v[i] + (kp_joint * (joint_target.q[i] - pos_curr.q[i]));
+        }
+
+        if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) return false;
+
+        sim.step();
+        t += physics_dt;
+
+        if (t - last_render_t >= render_dt) {
+            auto start_render = std::chrono::steady_clock::now();
+
+            sim.update_scene();
+            sim.render();
+            last_render_t = t;
+
+            std::this_thread::sleep_until(start_render + std::chrono::duration<double>(render_dt));
+        }
+    }
+
+    control_target.v.setZero();
+    sim.write(control_target);
+    sim.step();
+
+    return true;
+}
+
+template <xarm_geo::TaskSpaceTrajectory T>
+auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simulation &sim,
+                    const T &trajectory, double duration, const Eigen::VectorXd &q_home,
+                    const TestParams &params) -> int {
 
     xarm_geo::JointPosition pos_curr(model.dof);
     xarm_geo::JointVelocity control_target(model.dof);
+
+    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) return 1;
+
     xarm_geo::TaskSpaceTarget task_target;
+    if (trajectory.evaluate(0.0, task_target) != xarm_geo::TrajectoryStatus::OK) return 1;
+
+    bool ik_success = xarm_geo::inverse_kinematics(model, data, q_home, task_target.pose);
+    if (!ik_success) {
+        std::cerr << "IK FAILED for Trajectory Start Pose\n";
+        return 1;
+    }
+    Eigen::VectorXd q_start = data.q_out;
+
+    // --- PHASE 1: HOME TO START ---
+
+    double start_duration = 3.0;
+
+    std::cout << "\n[PHASE 1] Moving from Home to Trajectory Start...\n";
+    xarm_geo::trajectories::JointPTP approach_traj(q_home, q_start, start_duration);
+
+    if (!run_joint_ptp(sim, approach_traj, start_duration, pos_curr, control_target)) {
+        std::cerr << "Failed during Phase 1 Approach.\n";
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // --- PHASE 2: MAIN TRAJECTORY EXECUTION ---
+
+    std::cout << "\n[PHASE 2] Executing Task Space Trajectory...\n";
+
+    std::ofstream log_file;
+    if (params.log_data) {
+        std::string filename =
+            std::format("tests/results/trajectory_log_{}.csv", params.trajectory_mode);
+        log_file.open(filename);
+        log_file << "time,target_x,target_y,target_z,actual_x,actual_y,actual_z,"
+                 << "target_roll,target_pitch,target_yaw,actual_roll,actual_pitch,actual_yaw\n";
+    }
+
+    std::cout << "Starting Simulation.\n"
+              << "  Geometric Mode: " << (params.geometric ? "ON" : "OFF") << "\n"
+              << "  Trajectory: " << params.trajectory_mode << "\n"
+              << "  Marker: " << (params.show_marker ? "ON" : "OFF") << "\n"
+              << "  Data Logging: " << (params.log_data ? "ON" : "OFF") << "\n";
 
     double t = 0.0;
     double physics_dt = 0.002;
     double render_dt = 1.0 / 60.0;
     double last_render_t = 0.0;
 
-    // --- SET INITIAL CONFIGURATION (IK SNAP TO TRAJECTORY START) ---
-
-    // Evaluate at t=0 and handle potential errors
-    if (trajectory.evaluate(0.0, task_target) != xarm_geo::TrajectoryStatus::OK) {
-        std::cerr << "Error: Failed to compute Initial Trajectory Target.\n";
-        return 1;
-    }
-
-    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) {
-        std::cerr << "Error: Failed to read Initial Joint Positions.\n";
-        return 1;
-    }
-
-    // Use target.pose for IK
-    bool ik_success = xarm_geo::inverse_kinematics(model, data, pos_curr.q, task_target.pose);
-    if (!ik_success) {
-        std::cerr << "IK FAILED\n";
-        return 1;
-    }
-    sim.set_joint_positions(data.q_out);
-
-    // --- CSV LOGGING SETUP ---
-
-    std::string filename = std::format("tests/results/trajectory_log_{}.csv", trajectory_mode);
-    std::ofstream log_file(filename);
-    log_file << "time,target_x,target_y,target_z,actual_x,actual_y,actual_z,"
-             << "target_roll,target_pitch,target_yaw,actual_roll,actual_pitch,actual_yaw\n";
-
-    // --- STARTING SIMULATION ---
-
-    std::cout << "Starting Simulation.\n"
-              << "  Geometric Mode: " << (use_geometric_controller ? "ON" : "OFF") << "\n"
-              << "  Trajectory: " << trajectory_mode << "\n"
-              << "  Marker: " << (show_marker ? "ON" : "OFF") << "\n"
-              << "  Data Logging: " << (log_data ? "ON" : "OFF") << "\n";
-
     while (t < duration && sim.is_running()) {
-        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) {
-            std::cerr << "Error: Failed to read Current Joint Positions. Halting Loop.\n";
-            break;
-        }
+        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) break;
         xarm_geo::compute_jacobians(model, data, pos_curr.q);
 
-        // Evaluate Trajectory at time `t` (Writes directly into pre-allocated `target`)
-        if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) {
-            std::cerr << "Error: Trajectory Evaluation Failed. Halting Loop.\n";
-            break;
-        }
-
-        Eigen::Vector3d target_pos = task_target.pose.r3();
+        if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) break;
 
         xarm_geo::manifold::SE3::Twist cmd_twist;
-        double kp = 10;  // Tracking Gain
+        double kp = 8;
 
-        if (use_geometric_controller) {
+        if (params.geometric) {
             xarm_geo::manifold::SE3 pose_err_body = data.ee_pose.inverse() * task_target.pose;
             xarm_geo::manifold::SE3::Twist twist_err_body = pose_err_body.log();
 
-            // Implement Feedforward + Proportional Control
-            cmd_twist = task_target.twist + (kp * twist_err_body);
+            // Transform Target Twist from Target Pose Frame to Current Pose Frame
+            xarm_geo::manifold::SE3::Twist target_twist_ee = pose_err_body.Ad() * task_target.twist;
 
+            // Implement Feedforward + Proportional Control
+            cmd_twist = target_twist_ee + (kp * twist_err_body);
         } else {
-            Eigen::Vector3d pos_err_space = target_pos - data.ee_pose.r3();
+            Eigen::Vector3d pos_err_space = task_target.pose.r3() - data.ee_pose.r3();
             Eigen::Vector3d target_euler = task_target.pose.so3().matrix().eulerAngles(2, 1, 0);
 
             Eigen::Matrix3d R_curr = data.ee_pose.so3().matrix();
@@ -126,58 +176,76 @@ auto run_simulation(const T &trajectory, double duration, bool use_geometric_con
                     Eigen::AngleAxisd(curr_pitch, Eigen::Vector3d::UnitY()) *
                     (Eigen::Vector3d::UnitX() * d_roll);
 
-            // Apply Proportional Term
             Eigen::Matrix3d Rt = R_curr.transpose();
             cmd_twist.head<3>() = Rt * (kp * pos_err_space);
             cmd_twist.tail<3>() = Rt * omega_space;
 
-            // Apply Feedforward Term
-            cmd_twist += task_target.twist;
+            xarm_geo::manifold::SE3 pose_err = data.ee_pose.inverse() * task_target.pose;
+            cmd_twist += pose_err.Ad() * task_target.twist;
         }
 
         xarm_geo::inverse_diff_kinematics(model, data, cmd_twist);
         control_target.v = data.v_out;
         if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) break;
 
-        if (log_data) {
+        if (params.log_data) {
             Eigen::Vector3d actual_euler =
                 data.ee_pose.so3().quat().toRotationMatrix().eulerAngles(2, 1, 0);
             Eigen::Vector3d target_euler =
                 task_target.pose.so3().quat().toRotationMatrix().eulerAngles(2, 1, 0);
 
-            log_file << t << "," << target_pos.x() << "," << target_pos.y() << "," << target_pos.z()
-                     << "," << data.ee_pose.r3().x() << "," << data.ee_pose.r3().y() << ","
-                     << data.ee_pose.r3().z() << "," << target_euler[2] << "," << target_euler[1]
-                     << "," << target_euler[0] << "," << actual_euler[2] << "," << actual_euler[1]
-                     << "," << actual_euler[0] << "\n";
+            log_file << t << "," << task_target.pose.r3().x() << "," << task_target.pose.r3().y()
+                     << "," << task_target.pose.r3().z() << "," << data.ee_pose.r3().x() << ","
+                     << data.ee_pose.r3().y() << "," << data.ee_pose.r3().z() << ","
+                     << target_euler[2] << "," << target_euler[1] << "," << target_euler[0] << ","
+                     << actual_euler[2] << "," << actual_euler[1] << "," << actual_euler[0] << "\n";
         }
 
         sim.step();
         t += physics_dt;
 
         if (t - last_render_t >= render_dt) {
-            if (show_marker) { sim.set_marker(task_target.pose); }
+            if (params.show_marker) sim.set_marker(task_target.pose);
+
+            auto start_render = std::chrono::steady_clock::now();
+
             sim.update_scene();
             sim.render();
             last_render_t = t;
-            std::this_thread::sleep_for(std::chrono::duration<double>(render_dt));
+
+            std::this_thread::sleep_until(start_render + std::chrono::duration<double>(render_dt));
         }
     }
 
+    // --- PHASE 3: END TO HOME ---
+
+    std::cout << "\n[PHASE 3] Task Complete. Returning to Home...\n";
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    double end_duration = 3.0;
+
+    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) {
+        std::cerr << "Failed to Read Simulation State for Phase 3 Return.\n";
+        return 1;
+    }
+
+    xarm_geo::trajectories::JointPTP return_traj(pos_curr.q, q_home, end_duration);
+    if (!run_joint_ptp(sim, return_traj, end_duration, pos_curr, control_target)) {
+        std::cerr << "Failed during Phase 3 Return.\n";
+        return 1;
+    }
+
     sim.shutdown();
-    log_file.close();
-    std::cout << "Simulation Completed.\n";
+    std::cout << "Simulation Sequence Completed Safely.\n";
+
+    if (params.log_data) log_file.close();
+
     return 0;
 }
 
 auto main(int argc, char *argv[]) -> int {
 
-    // --- DEFAULT ARGUMENTS ---
-
-    bool geometric = true;
-    int trajectory_mode = 2;
-    bool show_marker = true;
-    bool log_data = false;
+    TestParams params;
 
     // --- COMMAND LINE ARGUMENT PARSING ---
 
@@ -195,31 +263,58 @@ auto main(int argc, char *argv[]) -> int {
         }
 
         if (arg == "--geometric" && i + 1 < argc) {
-            geometric = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
+            params.geometric = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
         } else if (arg == "--trajectory" && i + 1 < argc) {
             try {
-                trajectory_mode = std::stoi(argv[++i]);
-            } catch (...) {}
+                params.trajectory_mode = std::stoi(argv[++i]);
+                if (params.trajectory_mode < 0 || params.trajectory_mode > 2) {
+                    throw std::out_of_range("Mode must be 0, 1, or 2");
+                }
+            } catch (const std::exception &e) {
+                std::cerr << "Warning: Invalid trajectory mode. Defaulting to mode 2.\n";
+                params.trajectory_mode = 2;
+            }
         } else if (arg == "--marker" && i + 1 < argc) {
-            show_marker = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
+            params.show_marker = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
         } else if (arg == "--log" && i + 1 < argc) {
-            log_data = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
+            params.log_data = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
         }
     }
 
-    // --- RUNTIME TO COMPILE-TIME DISPATCH ---
+    // --- EXECUTE SIMULATION ---
 
-    double duration = 15.0;
+    xarm_geo::Model model = xarm_geo::build_model(6, "XI130412C23L45");
+    xarm_geo::Data data(model);
+    xarm_geo::Simulation sim(model.mjcf_file);
 
-    // 5. Update the namespaces to match the new module architecture
-    if (trajectory_mode == 0) {
-        xarm_geo::trajectories::FigureEight traj;
-        return run_simulation(traj, duration, geometric, trajectory_mode, show_marker, log_data);
-    } else if (trajectory_mode == 1) {
-        xarm_geo::trajectories::WingInspection traj;
-        return run_simulation(traj, duration, geometric, trajectory_mode, show_marker, log_data);
+    Eigen::VectorXd q_home = Eigen::VectorXd::Zero(model.dof);
+    q_home[0] = 1.5 * std::numbers::pi;
+
+    sim.set_joint_positions(q_home);
+
+    xarm_geo::JointPosition pos_curr(model.dof);
+    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) return 1;
+
+    xarm_geo::compute_jacobians(model, data, pos_curr.q);
+
+    // Creating Anchor Pose (Centre of Trajectory)
+    double q0 = q_home[0];
+    Eigen::Vector3d center(0.35 * std::cos(q0), 0.35 * std::sin(q0), 0.30);
+    Eigen::Quaterniond rot(
+        Eigen::AngleAxisd(q0 - (1.5 * std::numbers::pi), Eigen::Vector3d::UnitZ()));
+
+    xarm_geo::manifold::SE3 anchor_pose(xarm_geo::manifold::SO3(rot), center);
+
+    double traj_duration = 15.0;
+
+    if (params.trajectory_mode == 0) {
+        xarm_geo::trajectories::FigureEight traj(anchor_pose);
+        return run_simulation(model, data, sim, traj, traj_duration, q_home, params);
+    } else if (params.trajectory_mode == 1) {
+        xarm_geo::trajectories::WingInspection traj(anchor_pose);
+        return run_simulation(model, data, sim, traj, traj_duration, q_home, params);
     } else {
-        xarm_geo::trajectories::TiltingCircle traj;
-        return run_simulation(traj, duration, geometric, trajectory_mode, show_marker, log_data);
+        xarm_geo::trajectories::TiltingCircle traj(anchor_pose, traj_duration);
+        return run_simulation(model, data, sim, traj, traj_duration, q_home, params);
     }
 }

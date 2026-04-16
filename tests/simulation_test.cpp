@@ -7,6 +7,7 @@
 
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/interfaces/simulation.h>
+#include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/kinematics.h>
 #include <xarm_geo/trajectory/sample_trajectories.h>
 #include <xarm_geo/utils/model_builder.h>
@@ -64,9 +65,10 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::Join
 }
 
 template <xarm_geo::TaskSpaceTrajectory T>
-auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simulation &sim,
-                    const T &trajectory, double duration, const Eigen::VectorXd &q_home,
-                    const TestParams &params) -> int {
+auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
+                    xarm_geo::CollisionModel &col_model, xarm_geo::CollisionData &col_data,
+                    xarm_geo::Simulation &sim, const T &trajectory, double duration,
+                    const Eigen::VectorXd &q_home, const TestParams &params) -> int {
 
     xarm_geo::JointPosition pos_curr(model.dof);
     xarm_geo::JointVelocity control_target(model.dof);
@@ -76,12 +78,29 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simu
     xarm_geo::TaskSpaceTarget task_target;
     if (trajectory.evaluate(0.0, task_target) != xarm_geo::TrajectoryStatus::OK) return 1;
 
-    bool ik_success = xarm_geo::inverse_kinematics(model, data, q_home, task_target.pose);
+    // --- Layer 1: Collision-Aware IK for Start Pose ---
+
+    bool ik_success =
+        xarm_geo::inverse_kinematics(model, data, col_model, col_data, q_home, task_target.pose);
     if (!ik_success) {
-        std::cerr << "IK FAILED for Trajectory Start Pose\n";
+        std::cerr << "IK FAILED for Trajectory Start Pose (No Collision-Free Solution)\n";
         return 1;
     }
     Eigen::VectorXd q_start = data.q_out;
+
+    // --- Layer 2: Pre-Flight Trajectory Validation ---
+
+    std::cout << "\n[PRE-FLIGHT] Validating Trajectory for Collision-Free Feasibility...\n";
+
+    auto validation = xarm_geo::validate_trajectory(model, data, col_model, col_data, trajectory,
+                                                    duration, q_start);
+
+    if (!validation.valid) {
+        std::cerr << "Trajectory Validation FAILED at t=" << validation.failure_time << " (Sample "
+                  << validation.failure_sample << "): " << validation.reason << "\n";
+        return 1;
+    }
+    std::cout << "[PRE-FLIGHT] Trajectory Validated!\n";
 
     // --- PHASE 1: HOME TO START ---
 
@@ -140,7 +159,20 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simu
             cmd_twist = target_twist_ee + (kp * twist_err_body);
         } else {
             Eigen::Vector3d pos_err_space = task_target.pose.r3() - data.ee_pose.r3();
-            Eigen::Vector3d target_euler = task_target.pose.so3().matrix().eulerAngles(2, 1, 0);
+
+            Eigen::Matrix3d R_target = task_target.pose.so3().matrix();
+            double target_pitch = std::asin(std::clamp(-R_target(2, 0), -1.0, 1.0));
+            double target_yaw;
+            double target_roll;
+
+            if (std::abs(std::cos(target_pitch)) > 1e-6) {
+                target_yaw = std::atan2(R_target(1, 0), R_target(0, 0));
+                target_roll = std::atan2(R_target(2, 1), R_target(2, 2));
+            } else {
+                target_yaw = 0.0;
+                target_roll = std::atan2(-R_target(0, 1), R_target(1, 1));
+            }
+            Eigen::Vector3d target_euler(target_yaw, target_pitch, target_roll);
 
             Eigen::Matrix3d R_curr = data.ee_pose.so3().matrix();
             double curr_pitch = std::asin(std::clamp(-R_curr(2, 0), -1.0, 1.0));
@@ -158,10 +190,12 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simu
 
             Eigen::Vector3d rot_err_space = target_euler - curr_euler;
             for (int i = 0; i < 3; ++i) {
-                while (rot_err_space[i] > std::numbers::pi)
+                while (rot_err_space[i] > std::numbers::pi) {
                     rot_err_space[i] -= 2.0 * std::numbers::pi;
-                while (rot_err_space[i] < -std::numbers::pi)
+                }
+                while (rot_err_space[i] < -std::numbers::pi) {
                     rot_err_space[i] += 2.0 * std::numbers::pi;
+                }
             }
 
             double d_yaw = kp * rot_err_space[0];
@@ -177,8 +211,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simu
                     (Eigen::Vector3d::UnitX() * d_roll);
 
             Eigen::Matrix3d Rt = R_curr.transpose();
-            cmd_twist.head<3>() = Rt * (kp * pos_err_space);
-            cmd_twist.tail<3>() = Rt * omega_space;
+            cmd_twist.head<3>() = Rt * (kp * pos_err_space);  // Body linear velocity
+            cmd_twist.tail<3>() = Rt * omega_space;           // Body angular velocity
 
             xarm_geo::manifold::SE3 pose_err = data.ee_pose.inverse() * task_target.pose;
             cmd_twist += pose_err.Ad() * task_target.twist;
@@ -186,7 +220,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simu
 
         xarm_geo::inverse_diff_kinematics(model, data, cmd_twist);
         control_target.v = data.v_out;
-        if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) break;
+        if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { break; }
 
         if (params.log_data) {
             Eigen::Vector3d actual_euler =
@@ -205,7 +239,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simu
         t += physics_dt;
 
         if (t - last_render_t >= render_dt) {
-            if (params.show_marker) sim.set_marker(task_target.pose);
+            if (params.show_marker) { sim.set_marker(task_target.pose); }
 
             auto start_render = std::chrono::steady_clock::now();
 
@@ -238,7 +272,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data, xarm_geo::Simu
     sim.shutdown();
     std::cout << "Simulation Sequence Completed Safely.\n";
 
-    if (params.log_data) log_file.close();
+    if (params.log_data) { log_file.close(); }
 
     return 0;
 }
@@ -256,9 +290,9 @@ auto main(int argc, char *argv[]) -> int {
                 << "Usage: " << argv[0] << " [options]\n"
                 << "Options:\n"
                 << "  --geometric <false|true> -> Toggle Geometric Controller (default: true)\n"
-                << "  --trajectory <0|1|2> -> Select trajectory mode (default: 2)\n"
-                << "  --marker <false|true> -> Show target marker in simulation (default: true)\n"
-                << "  --log <false|true> -> Log data to CSV file (default: false)\n";
+                << "  --trajectory <0|1|2|3|4> -> Select Trajectory Mode (default: 2)\n"
+                << "  --marker <false|true> -> Show Target Marker in simulation (default: true)\n"
+                << "  --log <false|true> -> Log Data to CSV File (default: false)\n";
             return 0;
         }
 
@@ -267,12 +301,11 @@ auto main(int argc, char *argv[]) -> int {
         } else if (arg == "--trajectory" && i + 1 < argc) {
             try {
                 params.trajectory_mode = std::stoi(argv[++i]);
-                if (params.trajectory_mode < 0 || params.trajectory_mode > 2) {
-                    throw std::out_of_range("Mode must be 0, 1, or 2");
+                if (params.trajectory_mode < 0 || params.trajectory_mode > 4) {
+                    throw std::out_of_range("Mode must be in range [0, 4]");
                 }
             } catch (const std::exception &e) {
-                std::cerr << "Warning: Invalid trajectory mode. Defaulting to mode 2.\n";
-                params.trajectory_mode = 2;
+                std::cerr << "Warning: Invalid Trajectory Mode. Defaulting to Mode 2.\n";
             }
         } else if (arg == "--marker" && i + 1 < argc) {
             params.show_marker = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
@@ -281,11 +314,15 @@ auto main(int argc, char *argv[]) -> int {
         }
     }
 
-    // --- EXECUTE SIMULATION ---
+    // --- SETUP ---
 
     xarm_geo::Model model = xarm_geo::build_model(6, "XI130412C23L45");
     xarm_geo::Data data(model);
     xarm_geo::Simulation sim(model.mjcf_file);
+
+    // Build Collision Model & Data
+    xarm_geo::CollisionModel col_model = xarm_geo::build_collision_model(model, true);
+    xarm_geo::CollisionData col_data(col_model);
 
     Eigen::VectorXd q_home = Eigen::VectorXd::Zero(model.dof);
     q_home[0] = 1.5 * std::numbers::pi;
@@ -293,13 +330,13 @@ auto main(int argc, char *argv[]) -> int {
     sim.set_joint_positions(q_home);
 
     xarm_geo::JointPosition pos_curr(model.dof);
-    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) return 1;
+    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) { return 1; }
 
     xarm_geo::compute_jacobians(model, data, pos_curr.q);
 
     // Creating Anchor Pose (Centre of Trajectory)
     double q0 = q_home[0];
-    Eigen::Vector3d center(0.35 * std::cos(q0), 0.35 * std::sin(q0), 0.30);
+    Eigen::Vector3d center(0.35 * std::cos(q0), 0.35 * std::sin(q0), 0.35);
     Eigen::Quaterniond rot(
         Eigen::AngleAxisd(q0 - (1.5 * std::numbers::pi), Eigen::Vector3d::UnitZ()));
 
@@ -309,12 +346,27 @@ auto main(int argc, char *argv[]) -> int {
 
     if (params.trajectory_mode == 0) {
         xarm_geo::trajectories::FigureEight traj(anchor_pose);
-        return run_simulation(model, data, sim, traj, traj_duration, q_home, params);
-    } else if (params.trajectory_mode == 1) {
+        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
+                              params);
+    }
+    if (params.trajectory_mode == 1) {
         xarm_geo::trajectories::WingInspection traj(anchor_pose);
-        return run_simulation(model, data, sim, traj, traj_duration, q_home, params);
-    } else {
+        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
+                              params);
+    }
+    if (params.trajectory_mode == 2) {
+        xarm_geo::trajectories::PipeInspection traj(anchor_pose);
+        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
+                              params);
+    }
+    if (params.trajectory_mode == 3) {
+        xarm_geo::trajectories::InnerCavityScan traj(anchor_pose);
+        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
+                              params);
+    }
+    if (params.trajectory_mode == 4) {
         xarm_geo::trajectories::TiltingCircle traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, sim, traj, traj_duration, q_home, params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
+                              params);
     }
 }

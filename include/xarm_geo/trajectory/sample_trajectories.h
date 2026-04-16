@@ -1,5 +1,6 @@
 #pragma once
 
+#include <utility>
 #include <vector>
 
 #include <smooth/spline/bspline.hpp>
@@ -17,7 +18,7 @@ namespace xarm_geo::trajectories {
         double size_y = 0.10;
         double size_z = 0.03;
 
-        explicit FigureEight(const manifold::SE3 &anchor) : anchor(anchor) {}
+        explicit FigureEight(manifold::SE3 anchor) : anchor(std::move(anchor)) {}
         [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
     };
 
@@ -29,7 +30,25 @@ namespace xarm_geo::trajectories {
         double scan_amp = 0.05;
         double curvature = 2.5;
 
-        explicit WingInspection(const manifold::SE3 &anchor) : anchor(anchor) {}
+        explicit WingInspection(manifold::SE3 anchor) : anchor(std::move(anchor)) {}
+        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
+    };
+
+    struct PipeInspection {
+        manifold::SE3 anchor;
+        double omega = 0.4;
+        double radius = 0.06;
+
+        explicit PipeInspection(manifold::SE3 anchor) : anchor(std::move(anchor)) {}
+        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
+    };
+
+    struct InnerCavityScan {
+        manifold::SE3 anchor;
+        double omega = 0.5;
+        double pos_amp = 0.05;
+
+        explicit InnerCavityScan(manifold::SE3 anchor) : anchor(std::move(anchor)) {}
         [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
     };
 
@@ -40,8 +59,8 @@ namespace xarm_geo::trajectories {
         double transition_start = 7.5;
         double transition_duration = 1.0;
 
-        explicit TiltingCircle(const manifold::SE3 &anchor, double duration)
-            : anchor(anchor), transition_start(duration / 2) {}
+        explicit TiltingCircle(manifold::SE3 anchor, double duration)
+            : anchor(std::move(anchor)), transition_start(duration / 2) {}
         [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
     };
 
@@ -72,6 +91,8 @@ namespace xarm_geo::trajectories {
 
     static_assert(TaskSpaceTrajectory<FigureEight>);
     static_assert(TaskSpaceTrajectory<WingInspection>);
+    static_assert(TaskSpaceTrajectory<PipeInspection>);
+    static_assert(TaskSpaceTrajectory<InnerCavityScan>);
     static_assert(TaskSpaceTrajectory<TiltingCircle>);
     static_assert(TaskSpaceTrajectory<Waypoint>);
     static_assert(JointSpaceTrajectory<JointPTP>);

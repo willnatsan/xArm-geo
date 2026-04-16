@@ -3,6 +3,7 @@
 #include <xarm_geo/core/system.h>
 
 namespace xarm_geo {
+
     void forward_dynamics(const Model &model, Data &data,
                           const Eigen::Ref<const Eigen::VectorXd> &q,
                           const Eigen::Ref<const Eigen::VectorXd> &v,
@@ -24,4 +25,5 @@ namespace xarm_geo {
                              const Eigen::Ref<const Eigen::VectorXd> &q,
                              const Eigen::Ref<const Eigen::VectorXd> &v,
                              const manifold::SE3::Wrench &ee_wrench = manifold::SE3::Wrench());
+
 }  // namespace xarm_geo

@@ -1,9 +1,11 @@
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <Eigen/Dense>
 #include <coal/collision_data.h>
 #include <coal/collision_object.h>
 #include <coal/shape/geometric_shapes.h>
@@ -52,6 +54,9 @@ namespace xarm_geo {
         std::vector<coal::CollisionRequest> collision_requests;
         std::vector<coal::CollisionResult> collision_results;
 
+        std::vector<coal::DistanceRequest> distance_requests;
+        std::vector<coal::DistanceResult> distance_results;
+
         // --- Pre-Allocation ---
         explicit CollisionData(const CollisionModel &col_model);
     };
@@ -62,4 +67,18 @@ namespace xarm_geo {
                                const CollisionModel &col_model, CollisionData &col_data);
 
     auto compute_collisions(const CollisionModel &col_model, CollisionData &col_data) -> bool;
+
+    // --- Distance Algorithms ---
+
+    struct DistanceResult {
+        double min_distance = std::numeric_limits<double>::max();
+        size_t closest_pair_idx = 0;                               // Index into collision_pairs
+        Eigen::Vector3d nearest_point1 = Eigen::Vector3d::Zero();  // Witness point on obj1
+        Eigen::Vector3d nearest_point2 = Eigen::Vector3d::Zero();  // Witness point on obj2
+    };
+
+    // Note: Requires update_geometry_poses() to have been called first.
+    auto compute_min_distance(const CollisionModel &col_model, CollisionData &col_data)
+        -> DistanceResult;
+
 }  // namespace xarm_geo

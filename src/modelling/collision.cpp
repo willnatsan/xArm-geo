@@ -1,4 +1,5 @@
 #include <coal/collision.h>
+#include <coal/distance.h>
 
 #include <xarm_geo/modelling/collision.h>
 
@@ -21,10 +22,10 @@ namespace xarm_geo {
                 int joint_j = static_cast<int>(geometries[j].parent_joint);
 
                 // Ignore if both are static environment objects
-                if (joint_i == 0 && joint_j == 0) continue;
+                if (joint_i == 0 && joint_j == 0) { continue; }
 
                 // Ignore adjacent robot links
-                if (std::abs(joint_i - joint_j) <= 1) continue;
+                if (std::abs(joint_i - joint_j) <= 1) { continue; }
 
                 collision_pairs.push_back({i, j});
             }
@@ -43,6 +44,10 @@ namespace xarm_geo {
         // Pre-Allocate Collision Requests & Results for Every Collision Pair
         collision_requests.resize(num_pairs);
         collision_results.resize(num_pairs);
+
+        // Pre-Allocate Distance Requests & Results for Every Collision Pair
+        distance_requests.resize(num_pairs);
+        distance_results.resize(num_pairs);
     }
 
     // --- Collision Algorithms ---
@@ -55,7 +60,7 @@ namespace xarm_geo {
             // If parent is 0 (World), kin_data.pose_tree[0] should be Identity.
             col_data.geom_poses[i] = kin_data.pose_tree[obj.parent_joint] * obj.pose;
 
-            // Update the dataful Collision Objects
+            // Update the Collision Objects
             coal::Transform3s transform(col_data.geom_poses[i].so3().matrix(),
                                         col_data.geom_poses[i].r3());
             col_data.collision_objects[i].setTransform(transform);
@@ -79,6 +84,37 @@ namespace xarm_geo {
         }
 
         return is_colliding;
+    }
+
+    // --- Distance Algorithms ---
+
+    auto compute_min_distance(const CollisionModel &col_model, CollisionData &col_data)
+        -> DistanceResult {
+
+        DistanceResult result;
+
+        for (size_t i = 0; i < col_model.collision_pairs.size(); ++i) {
+            const auto &pair = col_model.collision_pairs[i];
+
+            // Clear previous Distance Result for this Collision Pair
+            col_data.distance_results[i].clear();
+
+            // Distance Computation
+            coal::distance(&col_data.collision_objects[pair.obj1_idx],
+                           &col_data.collision_objects[pair.obj2_idx],
+                           col_data.distance_requests[i], col_data.distance_results[i]);
+
+            double dist = col_data.distance_results[i].min_distance;
+
+            if (dist < result.min_distance) {
+                result.min_distance = dist;
+                result.closest_pair_idx = i;
+                result.nearest_point1 = col_data.distance_results[i].nearest_points[0];
+                result.nearest_point2 = col_data.distance_results[i].nearest_points[1];
+            }
+        }
+
+        return result;
     }
 
 }  // namespace xarm_geo

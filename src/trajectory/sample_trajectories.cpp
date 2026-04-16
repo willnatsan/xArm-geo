@@ -58,6 +58,59 @@ namespace xarm_geo::trajectories {
         return TrajectoryStatus::OK;
     }
 
+    auto InnerCavityScan::evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus {
+        auto compute = [this](double time) -> manifold::SE3 {
+            Eigen::Vector3d local_pos(pos_amp * std::sin(omega * time), 0.0, 0.0);
+
+            double roll_target = 1.5 * std::sin(1.1 * omega * time);
+            double pitch_target = std::numbers::pi - (1.2 * std::sin(0.9 * omega * time));
+            double yaw_target = 2.0 * std::cos(1.3 * omega * time);
+
+            Eigen::Quaterniond local_rot =
+                Eigen::AngleAxisd(yaw_target, Eigen::Vector3d::UnitZ()) *
+                Eigen::AngleAxisd(pitch_target, Eigen::Vector3d::UnitY()) *
+                Eigen::AngleAxisd(roll_target, Eigen::Vector3d::UnitX());
+
+            return anchor * manifold::SE3(manifold::SO3(local_rot), local_pos);
+        };
+
+        target.pose = compute(t);
+
+        // Numerical Differentiation for Feedforward Twist
+        double dt = 0.001;
+        manifold::SE3 pose_next = compute(t + dt);
+        target.twist = (target.pose.inverse() * pose_next).log() / dt;
+
+        return TrajectoryStatus::OK;
+    }
+
+    auto PipeInspection::evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus {
+        auto compute = [this](double time) -> manifold::SE3 {
+            double y_pipe = radius * std::sin(omega * time);
+            double z_pipe = radius * (1.0 - std::cos(omega * time));
+
+            Eigen::Vector3d local_pos(0.0, y_pipe, -z_pipe);
+
+            double pitch_target = std::numbers::pi - (omega * time);
+
+            Eigen::Quaterniond local_rot =
+                Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ()) *
+                Eigen::AngleAxisd(pitch_target, Eigen::Vector3d::UnitY()) *
+                Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
+
+            return anchor * manifold::SE3(manifold::SO3(local_rot), local_pos);
+        };
+
+        target.pose = compute(t);
+
+        // Numerical Differentiation for Feedforward Twist
+        double dt = 0.001;
+        manifold::SE3 pose_next = compute(t + dt);
+        target.twist = (target.pose.inverse() * pose_next).log() / dt;
+
+        return TrajectoryStatus::OK;
+    }
+
     auto TiltingCircle::evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus {
         auto compute = [this](double time) -> manifold::SE3 {
             double tilt = 0.0;
@@ -131,9 +184,7 @@ namespace xarm_geo::trajectories {
         this->delta_q_ = q_end - this->q_start_;
 
         // Normalise for Shortest Path [-pi, pi]
-        for (Eigen::Index i = 0; i < this->delta_q_.size(); ++i) {
-            this->delta_q_[i] = std::remainder(this->delta_q_[i], 2.0 * std::numbers::pi);
-        }
+        for (auto &val : this->delta_q_) { val = std::remainder(val, 2.0 * std::numbers::pi); }
     }
 
     auto JointPTP::evaluate(double t, JointSpaceTarget &target) const -> TrajectoryStatus {

@@ -11,7 +11,7 @@
 
 namespace xarm_geo {
 
-    enum class TrajectoryStatus { OK, ERROR };
+    enum class TrajectoryStatus : std::uint8_t { OK, ERROR };
 
     // --- Task Space Trajectory ---
 

@@ -148,6 +148,7 @@ namespace xarm_geo::trajectories {
 
         // Build the Waypoints
         std::vector<manifold::SE3> base_waypoints;
+        base_waypoints.reserve(5);
         for (int i = 0; i < 5; ++i) { base_waypoints.push_back(waypoints.front()); }
         for (const auto &waypoint : waypoints) { base_waypoints.push_back(waypoint); }
         for (int i = 0; i < 5; ++i) { base_waypoints.push_back(waypoints.back()); }
@@ -160,13 +161,11 @@ namespace xarm_geo::trajectories {
     }
 
     auto Waypoint::evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus {
-        // Query the Continuous B-Spline
-        target.pose = this->spline_(t);
+        manifold::SE3::Tangent vel;
 
-        // Numerical Differentiation for Feedforward Twist
-        double dt = 0.001;
-        manifold::SE3 pose_next = this->spline_(t + dt);
-        target.twist = (target.pose.inverse() * pose_next).log() / dt;
+        // Using Analytical Derivatives from `smooth` to get Twist
+        target.pose = this->spline_(t, smooth::OptTangent<manifold::SE3>{vel});
+        target.twist = vel;
 
         return TrajectoryStatus::OK;
     }
@@ -208,7 +207,7 @@ namespace xarm_geo::trajectories {
         double tau5 = tau4 * tau;
 
         double s = (10.0 * tau3) - (15.0 * tau4) + (6.0 * tau5);
-        double ds_dt = (30.0 * tau2 - 60.0 * tau3 + 30.0 * tau4) / this->duration_;
+        double ds_dt = ((30.0 * tau2) - (60.0 * tau3) + (30.0 * tau4)) / this->duration_;
 
         target.q = this->q_start_ + (s * this->delta_q_);
         target.v = ds_dt * this->delta_q_;

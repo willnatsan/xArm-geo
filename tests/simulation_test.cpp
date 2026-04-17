@@ -32,16 +32,16 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::Join
     xarm_geo::JointSpaceTarget joint_target(pos_curr.q.size());
 
     while (t < duration && sim.is_running()) {
-        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) return false;
+        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) { return false; }
 
-        if (traj.evaluate(t, joint_target) != xarm_geo::TrajectoryStatus::OK) return false;
+        if (traj.evaluate(t, joint_target) != xarm_geo::TrajectoryStatus::OK) { return false; }
 
         for (size_t i = 0; i < control_target.v.size(); ++i) {
             control_target.v[i] =
                 joint_target.v[i] + (kp_joint * (joint_target.q[i] - pos_curr.q[i]));
         }
 
-        if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) return false;
+        if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { return false; }
 
         sim.step();
         t += physics_dt;
@@ -73,10 +73,10 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     xarm_geo::JointPosition pos_curr(model.dof);
     xarm_geo::JointVelocity control_target(model.dof);
 
-    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) return 1;
+    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) { return 1; }
 
     xarm_geo::TaskSpaceTarget task_target;
-    if (trajectory.evaluate(0.0, task_target) != xarm_geo::TrajectoryStatus::OK) return 1;
+    if (trajectory.evaluate(0.0, task_target) != xarm_geo::TrajectoryStatus::OK) { return 1; }
 
     // --- Layer 1: Collision-Aware IK for Start Pose ---
 
@@ -140,10 +140,10 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     double last_render_t = 0.0;
 
     while (t < duration && sim.is_running()) {
-        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) break;
+        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) { break; }
         xarm_geo::compute_jacobians(model, data, pos_curr.q);
 
-        if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) break;
+        if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) { break; }
 
         xarm_geo::manifold::SE3::Twist cmd_twist;
         double kp = 8;

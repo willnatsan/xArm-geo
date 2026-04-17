@@ -2,41 +2,19 @@
 
 #include <chrono>
 #include <concepts>
+#include <cstdint>
 
 #include <Eigen/Dense>
 
+#include <xarm_geo/core/motion.h>
+
 namespace xarm_geo {
-    enum class InterfaceStatus { OK, ERROR };
 
-    // --- Joint Motion Types (For Reading / Writing) ---
-
-    struct JointPosition {
-        Eigen::VectorXd q;
-        explicit JointPosition(int dof) : q(Eigen::VectorXd::Zero(dof)) {}
-    };
-
-    struct JointVelocity {
-        Eigen::VectorXd v;
-        explicit JointVelocity(int dof) : v(Eigen::VectorXd::Zero(dof)) {}
-    };
-
-    struct JointTorque {
-        Eigen::VectorXd tau;
-        explicit JointTorque(int dof) : tau(Eigen::VectorXd::Zero(dof)) {}
-    };
-
-    struct JointState {
-        Eigen::VectorXd q;
-        Eigen::VectorXd v;
-        Eigen::VectorXd tau;
-        explicit JointState(int dof)
-            : q(Eigen::VectorXd::Zero(dof)), v(Eigen::VectorXd::Zero(dof)),
-              tau(Eigen::VectorXd::Zero(dof)) {}
-    };
+    enum class InterfaceStatus : std::uint8_t { OK, ERROR };
 
     // --- Hardware / Simulation Concepts ---
 
-    // Base Interface Requirements
+    // Base Interface Lifecycle Requirements
     // Note: No Dedicated `init()` Method -> Assuming RAII (Initialisation in Constructor)
     template <typename T>
     concept Interface = requires(T interface) {
@@ -45,16 +23,16 @@ namespace xarm_geo {
     };
 
     // Defines the Joint Motion Type that can be READ from the Interface
-    template <typename T, typename JointMotion>
-    concept Observable = Interface<T> && requires(T interface, JointMotion &data) {
-        { interface.read(data) } -> std::same_as<InterfaceStatus>;
-        { interface.read_time() } -> std::same_as<std::chrono::nanoseconds>;
+    template <typename T, typename J>
+    concept Observable = Interface<T> && JointMotion<J> && requires(T interface, J &data) {
+        { interface.read(data) } noexcept -> std::same_as<InterfaceStatus>;
+        { interface.read_time() } noexcept -> std::same_as<std::chrono::nanoseconds>;
     };
 
     // Defines the Joint Motion Type that can be WRITTEN to the Interface
-    template <typename T, typename JointMotion>
-    concept Controllable = Interface<T> && requires(T interface, const JointMotion &cmd) {
-        { interface.write(cmd) } -> std::same_as<InterfaceStatus>;
+    template <typename T, typename J>
+    concept Controllable = Interface<T> && JointMotion<J> && requires(T interface, const J &cmd) {
+        { interface.write(cmd) } noexcept -> std::same_as<InterfaceStatus>;
     };
 
 }  // namespace xarm_geo

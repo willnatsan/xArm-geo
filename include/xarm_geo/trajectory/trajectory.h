@@ -30,8 +30,10 @@ namespace xarm_geo {
     struct JointSpaceTarget {
         Eigen::VectorXd q;
         Eigen::VectorXd v;
+        Eigen::VectorXd a;
         explicit JointSpaceTarget(int dof)
-            : q(Eigen::VectorXd::Zero(dof)), v(Eigen::VectorXd::Zero(dof)) {}
+            : q(Eigen::VectorXd::Zero(dof)), v(Eigen::VectorXd::Zero(dof)),
+              a(Eigen::VectorXd::Zero(dof)) {}
     };
 
     template <typename T>

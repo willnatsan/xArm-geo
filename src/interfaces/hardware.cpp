@@ -30,7 +30,7 @@ namespace xarm_geo {
 
     Hardware::~Hardware() { this->shutdown(); }
 
-    // --- Concept: Lifecycle Management ---
+    // --- Concept: Interface (Lifecycle Management & State Reading) ---
 
     auto Hardware::is_running() const -> bool {
         return this->arm->is_connected() && !this->arm->has_err_warn();
@@ -39,14 +39,10 @@ namespace xarm_geo {
     void Hardware::shutdown() {
         this->stop();
 
-        if (this->arm && this->arm->is_connected()) {
-            this->arm->disconnect();
-        }
+        if (this->arm && this->arm->is_connected()) { this->arm->disconnect(); }
     }
 
-    // --- Concept: Observable ---
-
-    auto Hardware::read(JointState &data) -> InterfaceStatus {
+    auto Hardware::read(JointState &state) noexcept -> InterfaceStatus {
         // Setting Up Data Arrays
         // Note: xArm SDK expects Fixed Size of 7
         float pos[7] = {0.0F};
@@ -58,9 +54,9 @@ namespace xarm_geo {
         if (res != 0) { return InterfaceStatus::ERROR; }
 
         for (int i = 0; i < this->dof_; ++i) {
-            data.q[i] = static_cast<double>(pos[i]);
-            data.v[i] = static_cast<double>(vel[i]);
-            data.tau[i] = static_cast<double>(torque[i]);
+            state.q[i] = static_cast<double>(pos[i]);
+            state.v[i] = static_cast<double>(vel[i]);
+            state.tau[i] = static_cast<double>(torque[i]);
         }
 
         this->last_read_time_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -69,11 +65,13 @@ namespace xarm_geo {
         return InterfaceStatus::OK;
     }
 
-    auto Hardware::read_time() const -> std::chrono::nanoseconds { return this->last_read_time_; }
+    auto Hardware::read_time() const noexcept -> std::chrono::nanoseconds {
+        return this->last_read_time_;
+    }
 
-    // --- Concept: Controllable ---
+    // --- Concept: Controllable (Command Writing) ---
 
-    auto Hardware::write(const JointVelocity &cmd) -> InterfaceStatus {
+    auto Hardware::write(const JointVelocity &cmd) noexcept -> InterfaceStatus {
         // Setting up Command Array
         // Note: xArm SDK expects Fixed Size of 7
         float vel[7] = {0.0F};
@@ -98,8 +96,7 @@ namespace xarm_geo {
     void Hardware::disable_motors() {
         this->stop();
 
-        if (this->arm && this->arm->is_connected()) {
-            this->arm->motion_enable(false);
-        }
+        if (this->arm && this->arm->is_connected()) { this->arm->motion_enable(false); }
     }
+
 }  // namespace xarm_geo

@@ -54,23 +54,19 @@ namespace xarm_geo {
         Simulation(const std::string &mjcf_file, const Config &config);
         ~Simulation();
 
-        // --- Concept: Lifecycle Management ---
+        // --- Concept: Interface (Lifecycle Management & State Reading) ---
 
         [[nodiscard]] auto is_running() const -> bool;
         void shutdown();
+        auto read(JointState &state) noexcept -> InterfaceStatus;
+        [[nodiscard]] auto read_time() const noexcept -> std::chrono::nanoseconds {
+            return last_read_time_;
+        }
 
-        // --- Concept: Observable (READ) ---
+        // --- Concept: Controllable (Command Writing) ---
 
-        auto read(JointPosition &pos) -> InterfaceStatus;
-        auto read(JointVelocity &vel) -> InterfaceStatus;
-        auto read(JointTorque &torque) -> InterfaceStatus;
-        [[nodiscard]] auto read_time() const -> std::chrono::nanoseconds { return last_read_time_; }
-
-        // --- Concept: Controllable (WRITE) ---
-
-        auto write(const JointVelocity &vel) -> InterfaceStatus;
-        auto write(const JointTorque &torque) -> InterfaceStatus;
-        void set_control_mode(ControlMode mode);
+        auto write(const JointVelocity &vel) noexcept -> InterfaceStatus;
+        auto write(const JointTorque &torque) noexcept -> InterfaceStatus;
 
         // --- Simulation Stepping ---
 
@@ -95,6 +91,7 @@ namespace xarm_geo {
         // --- Simulation Setters ---
 
         void set_joint_positions(const Eigen::VectorXd &q) const;
+        void set_control_mode(ControlMode mode);
         void reset() const;
 
         // --- Rendering & Visualisation ---
@@ -134,10 +131,9 @@ namespace xarm_geo {
     };
 
     // --- Compile-Time Concept Verifications ---
+
     static_assert(Interface<Simulation>);
-    static_assert(Observable<Simulation, JointPosition>);
-    static_assert(Observable<Simulation, JointVelocity>);
-    static_assert(Observable<Simulation, JointTorque>);
     static_assert(Controllable<Simulation, JointVelocity>);
     static_assert(Controllable<Simulation, JointTorque>);
+
 }  // namespace xarm_geo

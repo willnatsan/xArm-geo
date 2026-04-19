@@ -15,9 +15,11 @@ namespace xarm_geo {
 
     // --- Task Space Trajectory ---
 
+    // Note: All spatial quantities below are expressed in the end-effector BODY frame.
     struct TaskSpaceTarget {
         manifold::SE3 pose;
         manifold::SE3::Twist twist;
+        manifold::SE3::SpatialAcceleration spatial_acc;
     };
 
     template <typename T>

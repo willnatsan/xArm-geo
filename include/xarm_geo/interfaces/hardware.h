@@ -7,27 +7,32 @@
 #include <xarm_geo/interfaces/interface.h>
 
 namespace xarm_geo {
+
     class Hardware {
+
     public:
         // --- Direct Access (If Needed) ---
+
         std::unique_ptr<XArmAPI> arm;
 
         // --- Constructors & Destructors ---
+
         explicit Hardware(int dof, const std::string &robot_ip);
         ~Hardware();
 
-        // --- Concept: Interface ---
+        // --- Concept: Interface (Lifecycle Management & State Reading) ---
+
         [[nodiscard]] auto is_running() const -> bool;
         void shutdown();
+        auto read(JointState &state) noexcept -> InterfaceStatus;
+        [[nodiscard]] auto read_time() const noexcept -> std::chrono::nanoseconds;
 
-        // --- Concept: Observable (READ) ---
-        auto read(JointState &data) -> InterfaceStatus;
-        [[nodiscard]] auto read_time() const -> std::chrono::nanoseconds;
+        // --- Concept: Controllable (Command Writing) ---
 
-        // --- Concept: Controllable (WRITE) ---
-        auto write(const JointVelocity &cmd) -> InterfaceStatus;
+        auto write(const JointVelocity &cmd) noexcept -> InterfaceStatus;
 
         // --- Additional Utility Methods ---
+
         void stop();
         void disable_motors();
 
@@ -37,7 +42,8 @@ namespace xarm_geo {
     };
 
     // --- Compile-Time Concept Verifications ---
+
     static_assert(Interface<Hardware>);
-    static_assert(Observable<Hardware, JointState>);
     static_assert(Controllable<Hardware, JointVelocity>);
+
 }  // namespace xarm_geo

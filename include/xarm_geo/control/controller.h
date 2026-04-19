@@ -18,23 +18,29 @@ namespace xarm_geo {
         std::chrono::nanoseconds dt;
     };
 
-    // --- Controller Concepts / Interfaces ---
-    // Note: `Feedback` is the measured state; `Command` is the actuation output.
+    // Union Concept for Supported Reference Target Types.
+    template <typename R>
+    concept ControllerReference = std::same_as<std::remove_cvref_t<R>, JointSpaceTarget> ||
+                                  std::same_as<std::remove_cvref_t<R>, TaskSpaceTarget>;
 
-    template <typename T, typename Feedback, typename Command>
+    // --- Controller Concepts / Interfaces ---
+    // Reference: TaskSpaceTarget || JointSpaceTarget
+    // Command: JointPosition || JointVelocity || JointTorque
+
+    template <typename T, typename Reference, typename Command>
     concept ModelFreeController =
-        JointMotion<Feedback> && JointMotion<Command> &&
-        requires(T &controller, const Feedback &fb, const JointSpaceTarget &ref,
+        ControllerReference<Reference> && JointCommand<Command> &&
+        requires(T &controller, const JointState &fb, const Reference &ref,
                  const ControllerContext &ctx, Command &out) {
             { controller.update(fb, ref, ctx, out) } noexcept -> std::same_as<ControllerStatus>;
             { controller.reset() } noexcept -> std::same_as<void>;
         };
 
-    template <typename T, typename Feedback, typename Command>
+    template <typename T, typename Reference, typename Command>
     concept ModelBasedController =
-        JointMotion<Feedback> && JointMotion<Command> &&
-        requires(T &controller, const Model &model, Data &data, const Feedback &fb,
-                 const JointSpaceTarget &ref, const ControllerContext &ctx, Command &out) {
+        ControllerReference<Reference> && JointCommand<Command> &&
+        requires(T &controller, const Model &model, Data &data, const JointState &fb,
+                 const Reference &ref, const ControllerContext &ctx, Command &out) {
             {
                 controller.update(model, data, fb, ref, ctx, out)
             } noexcept -> std::same_as<ControllerStatus>;
@@ -42,8 +48,8 @@ namespace xarm_geo {
         };
 
     // Union Concept for Generic Controller
-    template <typename T, typename Feedback, typename Command>
+    template <typename T, typename Reference, typename Command>
     concept Controller =
-        ModelFreeController<T, Feedback, Command> || ModelBasedController<T, Feedback, Command>;
+        ModelFreeController<T, Reference, Command> || ModelBasedController<T, Reference, Command>;
 
 }  // namespace xarm_geo

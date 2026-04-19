@@ -110,7 +110,7 @@ namespace xarm_geo {
 
     Simulation::~Simulation() { this->shutdown(); }
 
-    // --- Concept: Lifecycle Management ---
+    // --- Concept: Interface (Lifecycle Management & State Reading) ---
 
     auto Simulation::is_running() const -> bool {
         if (this->is_shutdown_) return false;
@@ -145,50 +145,27 @@ namespace xarm_geo {
         is_shutdown_ = true;
     }
 
-    // --- Concept: Observable (READ) ---
-
-    auto Simulation::read(JointPosition &pos) -> InterfaceStatus {
+    auto Simulation::read(JointState &state) noexcept -> InterfaceStatus {
         if (this->is_shutdown_ || !this->data) { return InterfaceStatus::ERROR; };
 
-        // Resize Output Variable if Needed
-        if (pos.q.size() != this->dof_) { pos.q.resize(this->dof_); }
+        // Resize Output Variables if Needed
+        if (state.q.size() != this->dof_) { state.q.resize(this->dof_); }
+        if (state.v.size() != this->dof_) { state.v.resize(this->dof_); }
+        if (state.tau.size() != this->dof_) { state.tau.resize(this->dof_); }
 
-        pos.q = Eigen::Map<const Eigen::VectorXd>(this->data->qpos, this->dof_);
+        state.q = Eigen::Map<const Eigen::VectorXd>(this->data->qpos, this->dof_);
+        state.v = Eigen::Map<const Eigen::VectorXd>(this->data->qvel, this->dof_);
+        state.tau = Eigen::Map<const Eigen::VectorXd>(this->data->qfrc_actuator, this->dof_);
+
         this->last_read_time_ =
             std::chrono::nanoseconds(static_cast<long long>(this->data->time * 1e9));
 
         return InterfaceStatus::OK;
     }
 
-    auto Simulation::read(JointVelocity &vel) -> InterfaceStatus {
-        if (this->is_shutdown_ || !this->data) { return InterfaceStatus::ERROR; };
+    // --- Concept: Controllable (Command Writing) ---
 
-        // Resize Output Variable if Needed
-        if (vel.v.size() != this->dof_) { vel.v.resize(this->dof_); }
-
-        vel.v = Eigen::Map<const Eigen::VectorXd>(this->data->qvel, this->dof_);
-        this->last_read_time_ =
-            std::chrono::nanoseconds(static_cast<long long>(this->data->time * 1e9));
-
-        return InterfaceStatus::OK;
-    }
-
-    auto Simulation::read(JointTorque &torque) -> InterfaceStatus {
-        if (this->is_shutdown_ || !this->data) { return InterfaceStatus::ERROR; };
-
-        // Resize Output Variable if Needed
-        if (torque.tau.size() != this->dof_) { torque.tau.resize(this->dof_); }
-
-        torque.tau = Eigen::Map<const Eigen::VectorXd>(this->data->qfrc_actuator, this->dof_);
-        this->last_read_time_ =
-            std::chrono::nanoseconds(static_cast<long long>(this->data->time * 1e9));
-
-        return InterfaceStatus::OK;
-    }
-
-    // --- Concept: Controllable (WRITE) ---
-
-    auto Simulation::write(const JointVelocity &vel) -> InterfaceStatus {
+    auto Simulation::write(const JointVelocity &vel) noexcept -> InterfaceStatus {
         if (this->current_mode_ != ControlMode::VELOCITY) { return InterfaceStatus::ERROR; }
         if (this->is_shutdown_ || vel.v.size() != this->dof_) { return InterfaceStatus::ERROR; };
 
@@ -197,7 +174,7 @@ namespace xarm_geo {
         return InterfaceStatus::OK;
     }
 
-    auto Simulation::write(const JointTorque &torque) -> InterfaceStatus {
+    auto Simulation::write(const JointTorque &torque) noexcept -> InterfaceStatus {
         if (this->current_mode_ != ControlMode::TORQUE) { return InterfaceStatus::ERROR; }
         if (this->is_shutdown_ || torque.tau.size() != this->dof_) {
             return InterfaceStatus::ERROR;
@@ -206,44 +183,6 @@ namespace xarm_geo {
         Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu) = torque.tau;
 
         return InterfaceStatus::OK;
-    }
-
-    void Simulation::set_control_mode(ControlMode mode) {
-        if (mode == current_mode_) return;
-
-        for (int i = 0; i < this->model->nu; ++i) {
-            if (mode == ControlMode::VELOCITY) {
-                // Set to Affine Bias Type
-                this->model->actuator_biastype[i] = mjBIAS_AFFINE;
-
-                // Restore Velocity Mode: F = kv * ctrl - kv * vel
-                this->model->actuator_gainprm[(i * mjNGAIN) + 0] = this->kv_gains_[i];
-                this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
-                this->model->actuator_biasprm[(i * mjNBIAS) + 2] = -this->kv_gains_[i];
-
-                // Restore velocity limits for control inputs
-                this->model->actuator_ctrlrange[(i * 2) + 0] = -this->vel_limits_[i];
-                this->model->actuator_ctrlrange[(i * 2) + 1] = this->vel_limits_[i];
-
-            } else if (mode == ControlMode::TORQUE) {
-                // Set to None Bias Type
-                this->model->actuator_biastype[i] = mjBIAS_NONE;
-
-                // Switch to Torque Mode: F = 1.0 * ctrl
-                this->model->actuator_gainprm[(i * mjNGAIN) + 0] = 1.0;
-                this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
-                this->model->actuator_biasprm[(i * mjNBIAS) + 2] = 0.0;
-
-                // Expand control limits to match the actuator's force range
-                this->model->actuator_ctrlrange[(i * 2) + 0] = -this->force_limits_[i];
-                this->model->actuator_ctrlrange[(i * 2) + 1] = this->force_limits_[i];
-            }
-        }
-
-        // Safety: Zero out the control buffer to prevent violent jumps during transition
-        Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
-
-        current_mode_ = mode;
     }
 
     // --- Simulation Stepping ---
@@ -269,9 +208,12 @@ namespace xarm_geo {
 
     auto Simulation::get_pose(const int body_id) const -> manifold::SE3 {
         const Eigen::Vector3d pos(this->data->xpos + (body_id * 3));
-        const Eigen::Matrix3d rot = Eigen::Map<const Eigen::Matrix<mjtNum, 3, 3, Eigen::RowMajor>>(
-            this->data->xmat + (body_id * 9));
-        return {manifold::SO3(Eigen::Quaterniond(rot)), pos};
+
+        // Read Quaternion Directly from MuJoCo (w, x, y, z) Instead of Converting via xmat
+        const mjtNum *q = this->data->xquat + (body_id * 4);
+        manifold::SO3 rot(Eigen::Quaterniond(q[0], q[1], q[2], q[3]));
+
+        return {rot, pos};
     }
 
     auto Simulation::get_pose_tree() const -> std::vector<manifold::SE3> {
@@ -316,6 +258,44 @@ namespace xarm_geo {
 
         for (int i = 0; i < this->dof_; ++i) { data->qpos[i] = q[i]; }
         mj_forward(model, data);
+    }
+
+    void Simulation::set_control_mode(ControlMode mode) {
+        if (mode == current_mode_) return;
+
+        for (int i = 0; i < this->model->nu; ++i) {
+            if (mode == ControlMode::VELOCITY) {
+                // Set to Affine Bias Type
+                this->model->actuator_biastype[i] = mjBIAS_AFFINE;
+
+                // Restore Velocity Mode: F = kv * ctrl - kv * vel
+                this->model->actuator_gainprm[(i * mjNGAIN) + 0] = this->kv_gains_[i];
+                this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
+                this->model->actuator_biasprm[(i * mjNBIAS) + 2] = -this->kv_gains_[i];
+
+                // Restore velocity limits for control inputs
+                this->model->actuator_ctrlrange[(i * 2) + 0] = -this->vel_limits_[i];
+                this->model->actuator_ctrlrange[(i * 2) + 1] = this->vel_limits_[i];
+
+            } else if (mode == ControlMode::TORQUE) {
+                // Set to None Bias Type
+                this->model->actuator_biastype[i] = mjBIAS_NONE;
+
+                // Switch to Torque Mode: F = 1.0 * ctrl
+                this->model->actuator_gainprm[(i * mjNGAIN) + 0] = 1.0;
+                this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
+                this->model->actuator_biasprm[(i * mjNBIAS) + 2] = 0.0;
+
+                // Expand control limits to match the actuator's force range
+                this->model->actuator_ctrlrange[(i * 2) + 0] = -this->force_limits_[i];
+                this->model->actuator_ctrlrange[(i * 2) + 1] = this->force_limits_[i];
+            }
+        }
+
+        // Safety: Zero out the control buffer to prevent violent jumps during transition
+        Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
+
+        current_mode_ = mode;
     }
 
     void Simulation::reset() const {
@@ -405,4 +385,5 @@ namespace xarm_geo {
         mjv_moveCamera(sim->model, mjMOUSE_ZOOM, 0, -sim->config_.scroll_sensitivity * y_offset,
                        &sim->scene_, &sim->camera_);
     }
+
 }  // namespace xarm_geo

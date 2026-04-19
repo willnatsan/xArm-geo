@@ -20,7 +20,7 @@ struct TestParams {
 };
 
 auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::JointPTP &traj,
-                   double duration, xarm_geo::JointPosition &pos_curr,
+                   double duration, xarm_geo::JointState &state,
                    xarm_geo::JointVelocity &control_target) -> bool {
 
     double t = 0.0;
@@ -29,16 +29,15 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::Join
     double last_render_t = 0.0;
     double kp_joint = 5.0;
 
-    xarm_geo::JointSpaceTarget joint_target(pos_curr.q.size());
+    xarm_geo::JointSpaceTarget joint_target(state.q.size());
 
     while (t < duration && sim.is_running()) {
-        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) { return false; }
+        if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { return false; }
 
         if (traj.evaluate(t, joint_target) != xarm_geo::TrajectoryStatus::OK) { return false; }
 
         for (size_t i = 0; i < control_target.v.size(); ++i) {
-            control_target.v[i] =
-                joint_target.v[i] + (kp_joint * (joint_target.q[i] - pos_curr.q[i]));
+            control_target.v[i] = joint_target.v[i] + (kp_joint * (joint_target.q[i] - state.q[i]));
         }
 
         if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { return false; }
@@ -70,10 +69,10 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
                     xarm_geo::Simulation &sim, const T &trajectory, double duration,
                     const Eigen::VectorXd &q_home, const TestParams &params) -> int {
 
-    xarm_geo::JointPosition pos_curr(model.dof);
+    xarm_geo::JointState state(model.dof);
     xarm_geo::JointVelocity control_target(model.dof);
 
-    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) { return 1; }
+    if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { return 1; }
 
     xarm_geo::TaskSpaceTarget task_target;
     if (trajectory.evaluate(0.0, task_target) != xarm_geo::TrajectoryStatus::OK) { return 1; }
@@ -109,7 +108,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     std::cout << "\n[PHASE 1] Moving from Home to Trajectory Start...\n";
     xarm_geo::trajectories::JointPTP approach_traj(q_home, q_start, start_duration);
 
-    if (!run_joint_ptp(sim, approach_traj, start_duration, pos_curr, control_target)) {
+    if (!run_joint_ptp(sim, approach_traj, start_duration, state, control_target)) {
         std::cerr << "Failed during Phase 1 Approach.\n";
         return 1;
     }
@@ -140,8 +139,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     double last_render_t = 0.0;
 
     while (t < duration && sim.is_running()) {
-        if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) { break; }
-        xarm_geo::compute_jacobians(model, data, pos_curr.q);
+        if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { break; }
+        xarm_geo::compute_jacobians(model, data, state.q);
 
         if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) { break; }
 
@@ -258,13 +257,13 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     double end_duration = 3.0;
 
-    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) {
+    if (sim.read(state) != xarm_geo::InterfaceStatus::OK) {
         std::cerr << "Failed to Read Simulation State for Phase 3 Return.\n";
         return 1;
     }
 
-    xarm_geo::trajectories::JointPTP return_traj(pos_curr.q, q_home, end_duration);
-    if (!run_joint_ptp(sim, return_traj, end_duration, pos_curr, control_target)) {
+    xarm_geo::trajectories::JointPTP return_traj(state.q, q_home, end_duration);
+    if (!run_joint_ptp(sim, return_traj, end_duration, state, control_target)) {
         std::cerr << "Failed during Phase 3 Return.\n";
         return 1;
     }
@@ -329,38 +328,40 @@ auto main(int argc, char *argv[]) -> int {
 
     sim.set_joint_positions(q_home);
 
-    xarm_geo::JointPosition pos_curr(model.dof);
-    if (sim.read(pos_curr) != xarm_geo::InterfaceStatus::OK) { return 1; }
+    xarm_geo::JointState state(model.dof);
+    if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { return 1; }
 
-    xarm_geo::compute_jacobians(model, data, pos_curr.q);
+    xarm_geo::compute_jacobians(model, data, state.q);
 
     // Creating Anchor Pose (Centre of Trajectory)
     double q0 = q_home[0];
     Eigen::Vector3d center(0.35 * std::cos(q0), 0.35 * std::sin(q0), 0.35);
-    Eigen::Quaterniond rot(
-        Eigen::AngleAxisd(q0 - (1.5 * std::numbers::pi), Eigen::Vector3d::UnitZ()));
 
-    xarm_geo::manifold::SE3 anchor_pose(xarm_geo::manifold::SO3(rot), center);
+    // Rotation about Z-axis
+    xarm_geo::manifold::SO3 rot =
+        xarm_geo::manifold::SO3::exp(Eigen::Vector3d::UnitZ() * (q0 - (1.5 * std::numbers::pi)));
+
+    xarm_geo::manifold::SE3 anchor_pose(rot, center);
 
     double traj_duration = 15.0;
 
     if (params.trajectory_mode == 0) {
-        xarm_geo::trajectories::FigureEight traj(anchor_pose);
+        xarm_geo::trajectories::FigureEight traj(anchor_pose, traj_duration);
         return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
                               params);
     }
     if (params.trajectory_mode == 1) {
-        xarm_geo::trajectories::WingInspection traj(anchor_pose);
+        xarm_geo::trajectories::WingInspection traj(anchor_pose, traj_duration);
         return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
                               params);
     }
     if (params.trajectory_mode == 2) {
-        xarm_geo::trajectories::PipeInspection traj(anchor_pose);
+        xarm_geo::trajectories::PipeInspection traj(anchor_pose, traj_duration);
         return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
                               params);
     }
     if (params.trajectory_mode == 3) {
-        xarm_geo::trajectories::InnerCavityScan traj(anchor_pose);
+        xarm_geo::trajectories::InnerCavityScan traj(anchor_pose, traj_duration);
         return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
                               params);
     }

@@ -119,4 +119,23 @@ namespace xarm_geo::manifold {
     // Mass is mathematically identical in shape to Inertia in this context
     template <LieGroup G> using Mass = Inertia<G>;
 
+    // --- Helper Functions ---
+
+    // Convert Roll-Pitch-Yaw (ZYX Euler angles) to SO(3) rotation using smooth's exp map
+    [[nodiscard]] inline auto rpy_to_SO3(double roll, double pitch, double yaw) -> SO3 {
+        return SO3::exp(yaw * Eigen::Vector3d::UnitZ()) *
+               SO3::exp(pitch * Eigen::Vector3d::UnitY()) *
+               SO3::exp(roll * Eigen::Vector3d::UnitX());
+    }
+
+    // Wrap Angle to [-pi, pi]
+    [[nodiscard]] inline auto wrap_to_pi(double angle) -> double {
+        return std::remainder(angle, 2.0 * std::numbers::pi);
+    }
+
+    // Wrap Angle to [center - pi, center + pi], respecting Joint Limit Midpoints
+    [[nodiscard]] inline auto wrap_to_range(double angle, double center) -> double {
+        return center + std::remainder(angle - center, 2.0 * std::numbers::pi);
+    }
+
 }  // namespace xarm_geo::manifold

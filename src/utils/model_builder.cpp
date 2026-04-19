@@ -32,23 +32,16 @@ namespace xarm_geo::internal {
             const auto yaw = joint_data["yaw"].as<double>();
 
             Eigen::Vector3d translation(x, y, z);
-            Eigen::Quaterniond quat = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
-                                      Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-                                      Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
-            manifold::SO3 rotation(quat);
+            manifold::SO3 rotation = manifold::rpy_to_SO3(roll, pitch, yaw);
             manifold::SE3 transform(rotation, translation);
 
             pose_curr *= transform;
             model.home_pose_tree.emplace_back(pose_curr);
 
-            const auto q = pose_curr.r3();
-            const auto w = pose_curr.so3() * Eigen::Vector3d::UnitZ();
-            const auto v = -w.cross(q);
-
-            manifold::SE3::Twist screw_axis_space;
-            screw_axis_space.head<3>() = v;
-            screw_axis_space.tail<3>() = w;
-            model.screw_axes_space.push_back(screw_axis_space);
+            // Screw Axis for Revolute Z-axis Joint: Transform Local Z-axis to Spatial Frame
+            manifold::SE3::Twist S_local_z = manifold::SE3::Twist::Zero();
+            S_local_z.tail<3>() = Eigen::Vector3d::UnitZ();
+            model.screw_axes_space.emplace_back(pose_curr.Ad() * S_local_z);
         }
 
         manifold::SE3 T_flange_to_ee = manifold::SE3::Identity();
@@ -62,11 +55,9 @@ namespace xarm_geo::internal {
             const auto yaw = ee_data["yaw"].as<double>(0.0);
 
             Eigen::Vector3d ee_trans(x, y, z);
-            Eigen::Quaterniond ee_quat = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
-                                         Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-                                         Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
+            manifold::SO3 ee_rot = manifold::rpy_to_SO3(roll, pitch, yaw);
 
-            T_flange_to_ee = xarm_geo::manifold::SE3(xarm_geo::manifold::SO3(ee_quat), ee_trans);
+            T_flange_to_ee = manifold::SE3(ee_rot, ee_trans);
         }
 
         pose_curr *= T_flange_to_ee;

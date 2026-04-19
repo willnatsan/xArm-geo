@@ -64,10 +64,9 @@ namespace xarm_geo {
 
         data.body_jacobian = data.ee_pose.inverse().Ad() * data.space_jacobian;
 
-        Eigen::Matrix<double, 6, 6> rot = Eigen::Matrix<double, 6, 6>::Zero();
-        rot.topLeftCorner<3, 3>() = data.ee_pose.so3().matrix();
-        rot.bottomRightCorner<3, 3>() = data.ee_pose.so3().matrix();
-        data.frame_jacobian = rot * data.body_jacobian;
+        // Frame Jacobian uses Rotation-Only Adjoint (Hybrid Frame: World-Aligned, EE-Origin)
+        manifold::SE3 T_rot_only(data.ee_pose.so3(), Eigen::Vector3d::Zero());
+        data.frame_jacobian = T_rot_only.Ad() * data.body_jacobian;
     };
 
     void inverse_diff_kinematics(const Model &model, Data &data,
@@ -98,7 +97,7 @@ namespace xarm_geo {
 
             if (limit > 0.0 && abs_vel > limit) {
                 double scale = abs_vel / limit;
-                if (scale > max_scale_factor) { max_scale_factor = scale; }
+                max_scale_factor = std::max(scale, max_scale_factor);
             }
         }
 
@@ -124,9 +123,8 @@ namespace xarm_geo {
                 // Update Kinematic Tree (As `data.q_out` changes every iteration)
                 compute_jacobians(model, data, data.q_out);
 
-                // Compute Error in se(3)
-                manifold::SE3 T_err = data.ee_pose.inverse() * target_pose;
-                manifold::SE3::Twist V_err = T_err.log();
+                // Compute Body-Frame Error Using Right-Minus: log(ee^{-1} * target)
+                manifold::SE3::Twist V_err = target_pose - data.ee_pose;
 
                 // If Converged -> Return
                 if (V_err.norm() < options.tolerance) { return true; }
@@ -136,17 +134,13 @@ namespace xarm_geo {
                 data.q_out += data.v_out;
 
                 for (int i = 0; i < model.dof; ++i) {
-                    // Wrap Joint Angles to [-pi, pi]
-                    while (data.q_out[i] > std::numbers::pi) {
-                        data.q_out[i] -= 2.0 * std::numbers::pi;
-                    }
-                    while (data.q_out[i] < -std::numbers::pi) {
-                        data.q_out[i] += 2.0 * std::numbers::pi;
-                    }
+                    // Wrap Joint Angle to [midpoint - pi, midpoint + pi]
+                    double midpoint = 0.5 * (model.limits[i].q_min + model.limits[i].q_max);
+                    data.q_out[i] = manifold::wrap_to_range(data.q_out[i], midpoint);
 
                     // Clamp Joint to Specified Joint Limits
-                    data.q_out[i] = std::max(model.limits[i].q_min,
-                                             std::min(data.q_out[i], model.limits[i].q_max));
+                    data.q_out[i] =
+                        std::clamp(data.q_out[i], model.limits[i].q_min, model.limits[i].q_max);
                 }
             }
 
@@ -177,9 +171,8 @@ namespace xarm_geo {
                 // Update Kinematic Tree (As `data.q_out` changes every iteration)
                 compute_jacobians(model, data, data.q_out);
 
-                // Compute Error in se(3)
-                manifold::SE3 T_err = data.ee_pose.inverse() * target_pose;
-                manifold::SE3::Twist V_err = T_err.log();
+                // Compute Body-Frame Error Using Right-Minus: log(ee^{-1} * target)
+                manifold::SE3::Twist V_err = target_pose - data.ee_pose;
 
                 // If Converged -> Check for Collisions & Return if None
                 if (V_err.norm() < options.tolerance) {
@@ -192,17 +185,13 @@ namespace xarm_geo {
                 data.q_out += data.v_out;
 
                 for (int i = 0; i < model.dof; ++i) {
-                    // Wrap Joint Angles to [-pi, pi]
-                    while (data.q_out[i] > std::numbers::pi) {
-                        data.q_out[i] -= 2.0 * std::numbers::pi;
-                    }
-                    while (data.q_out[i] < -std::numbers::pi) {
-                        data.q_out[i] += 2.0 * std::numbers::pi;
-                    }
+                    // Wrap Joint Angle to [midpoint - pi, midpoint + pi]
+                    double midpoint = 0.5 * (model.limits[i].q_min + model.limits[i].q_max);
+                    data.q_out[i] = manifold::wrap_to_range(data.q_out[i], midpoint);
 
                     // Clamp Joint to Specified Joint Limits
-                    data.q_out[i] = std::max(model.limits[i].q_min,
-                                             std::min(data.q_out[i], model.limits[i].q_max));
+                    data.q_out[i] =
+                        std::clamp(data.q_out[i], model.limits[i].q_min, model.limits[i].q_max);
                 }
             }
 

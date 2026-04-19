@@ -1,6 +1,5 @@
 #pragma once
 
-#include <utility>
 #include <vector>
 
 #include <smooth/spline/bspline.hpp>
@@ -11,59 +10,6 @@ namespace xarm_geo::trajectories {
 
     // --- Task Space Trajectories ---
 
-    struct FigureEight {
-        manifold::SE3 anchor;
-        double omega = 1.0;
-        double size_x = 0.15;
-        double size_y = 0.10;
-        double size_z = 0.03;
-
-        explicit FigureEight(manifold::SE3 anchor) : anchor(std::move(anchor)) {}
-        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
-    };
-
-    struct WingInspection {
-        manifold::SE3 anchor;
-        double omega_sweep = 0.5;
-        double omega_scan = 2.0;
-        double sweep_amp = 0.20;
-        double scan_amp = 0.05;
-        double curvature = 2.5;
-
-        explicit WingInspection(manifold::SE3 anchor) : anchor(std::move(anchor)) {}
-        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
-    };
-
-    struct PipeInspection {
-        manifold::SE3 anchor;
-        double omega = 0.4;
-        double radius = 0.06;
-
-        explicit PipeInspection(manifold::SE3 anchor) : anchor(std::move(anchor)) {}
-        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
-    };
-
-    struct InnerCavityScan {
-        manifold::SE3 anchor;
-        double omega = 0.5;
-        double pos_amp = 0.05;
-
-        explicit InnerCavityScan(manifold::SE3 anchor) : anchor(std::move(anchor)) {}
-        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
-    };
-
-    struct TiltingCircle {
-        manifold::SE3 anchor;
-        double omega = 2.0;
-        double R = 0.12;
-        double transition_start = 7.5;
-        double transition_duration = 1.0;
-
-        explicit TiltingCircle(manifold::SE3 anchor, double duration)
-            : anchor(std::move(anchor)), transition_start(duration / 2) {}
-        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
-    };
-
     class Waypoint {
     public:
         Waypoint(const std::vector<manifold::SE3> &waypoints, double duration);
@@ -71,6 +17,59 @@ namespace xarm_geo::trajectories {
 
     private:
         manifold::SE3::Spline<5> spline_;  // Internal B-Spline State
+    };
+
+    class FigureEight {
+    public:
+        explicit FigureEight(const manifold::SE3 &anchor, double duration = 15.0,
+                             double omega = 1.0, double size_x = 0.15, double size_y = 0.10,
+                             double size_z = 0.03);
+        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
+
+    private:
+        manifold::SE3::Spline<5> spline_;
+    };
+
+    class WingInspection {
+    public:
+        explicit WingInspection(const manifold::SE3 &anchor, double duration = 15.0,
+                                double omega_sweep = 0.5, double omega_scan = 2.0,
+                                double sweep_amp = 0.20, double scan_amp = 0.05,
+                                double curvature = 2.5);
+        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
+
+    private:
+        manifold::SE3::Spline<5> spline_;
+    };
+
+    class PipeInspection {
+    public:
+        explicit PipeInspection(const manifold::SE3 &anchor, double duration = 15.0,
+                                double omega = 0.4, double radius = 0.06);
+        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
+
+    private:
+        manifold::SE3::Spline<5> spline_;
+    };
+
+    class InnerCavityScan {
+    public:
+        explicit InnerCavityScan(const manifold::SE3 &anchor, double duration = 15.0,
+                                 double omega = 0.5, double pos_amp = 0.05);
+        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
+
+    private:
+        manifold::SE3::Spline<5> spline_;
+    };
+
+    class TiltingCircle {
+    public:
+        explicit TiltingCircle(const manifold::SE3 &anchor, double duration = 15.0,
+                               double omega = 2.0, double R = 0.12);
+        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus;
+
+    private:
+        manifold::SE3::Spline<5> spline_;
     };
 
     // --- Joint Space Trajectories ---

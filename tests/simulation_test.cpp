@@ -220,7 +220,9 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
             cmd_twist += pose_err.Ad() * task_target.twist;
         }
 
-        xarm_geo::inverse_diff_kinematics(model, data, cmd_twist);
+        xarm_geo::IKOptions options({.apply_scaling = true});
+        xarm_geo::inverse_diff_kinematics(model, data, cmd_twist, options);
+
         control_target.v = data.v_out;
         if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { break; }
 

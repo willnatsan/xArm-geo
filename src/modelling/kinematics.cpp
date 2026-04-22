@@ -89,19 +89,19 @@ namespace xarm_geo {
         data.v_out = data.ik.A.ldlt().solve(data.ik.b);
 
         // Joint Velocity Scaling (Ensure Limits are not Breached)
-        double max_scale_factor = 1.0;
+        if (options.apply_scaling) {
+            double max_scale_factor = 1.0;
+            for (int i = 0; i < model.dof; ++i) {
+                double abs_vel = std::abs(data.v_out(i));
+                double limit = model.limits[i].q_vel_max;
 
-        for (int i = 0; i < model.dof; ++i) {
-            double abs_vel = std::abs(data.v_out(i));
-            double limit = model.limits[i].q_vel_max;
-
-            if (limit > 0.0 && abs_vel > limit) {
-                double scale = abs_vel / limit;
-                max_scale_factor = std::max(scale, max_scale_factor);
+                if (limit > 0.0 && abs_vel > limit) {
+                    double scale = abs_vel / limit;
+                    max_scale_factor = std::max(scale, max_scale_factor);
+                }
             }
+            if (max_scale_factor > 1.0) { data.v_out /= max_scale_factor; }
         }
-
-        if (max_scale_factor > 1.0) { data.v_out /= max_scale_factor; }
     };
 
     auto inverse_kinematics(const Model &model, Data &data,

@@ -251,6 +251,14 @@ namespace xarm_geo::internal {
                     const char *file = mesh_xml->Attribute("filename");
                     if (!file) continue;
 
+                    std::string file_path(file);
+                    const std::string file_prefix = "file://";
+
+                    // If the path starts with "file://", strip it out
+                    if (file_path.starts_with(file_prefix)) {
+                        file_path.erase(0, file_prefix.length());
+                    }
+
                     Eigen::Vector3d scale =
                         parse_vec3(mesh_xml->Attribute("scale"), Eigen::Vector3d::Ones());
                     coal::Vec3s coal_scale(scale.x(), scale.y(), scale.z());
@@ -260,7 +268,8 @@ namespace xarm_geo::internal {
                         col_model.add_geometry(link_name + "_col", current_joint_idx, offset,
                                                mesh_geom);
                     } catch (const std::exception &e) {
-                        std::cerr << "Failed to load mesh: " << file << " | " << e.what() << "\n";
+                        std::cerr << "Failed to load mesh: " << file_path << " | " << e.what()
+                                  << "\n";
                     }
                 }
             }

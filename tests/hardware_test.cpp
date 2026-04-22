@@ -3,21 +3,20 @@
 #include <numbers>
 #include <string>
 #include <thread>
-#include <vector>
 
+#include <coal/shape/geometric_shapes.h>
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/interfaces/hardware.h>
 #include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/kinematics.h>
 #include <xarm_geo/trajectory/sample_trajectories.h>
 #include <xarm_geo/utils/model_builder.h>
-#include <coal/shape/geometric_shapes.h>
 
 // --- Helper: Safety Enclosure ---
 // Adds static box geometries around the robot to prevent workspace exits
 // void add_safety_enclosure(xarm_geo::CollisionModel &col_model) {
 //     double thickness = 0.05;
-//     double size = 1.2; 
+//     double size = 1.2;
 //     double height = 2.0;
 
 //     auto wall_geom = std::make_shared<coal::Box>(thickness, size, height);
@@ -55,7 +54,8 @@ auto run_joint_ptp_hw(xarm_geo::Hardware &hw, const xarm_geo::trajectories::Join
         if (hw.write(control_target) != xarm_geo::InterfaceStatus::OK) return false;
 
         t += dt;
-        next_tick += std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(dt));
+        next_tick += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(dt));
         std::this_thread::sleep_until(next_tick);
     }
     return true;
@@ -65,11 +65,11 @@ auto run_joint_ptp_hw(xarm_geo::Hardware &hw, const xarm_geo::trajectories::Join
 // Uses your custom inverse_diff_kinematics with DLS and Velocity Scaling
 template <xarm_geo::TaskSpaceTrajectory T>
 auto run_task_space_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model, xarm_geo::Data &data,
-                       const T &traj, double duration, 
-                       xarm_geo::JointState &state, xarm_geo::JointVelocity &control_target) -> bool {
+                       const T &traj, double duration, xarm_geo::JointState &state,
+                       xarm_geo::JointVelocity &control_target) -> bool {
     double t = 0.0, dt = 0.002, kp = 8.0;
     xarm_geo::IKOptions ik_opt;
-    ik_opt.damping = 0.1; // Damping for your DLS logic
+    ik_opt.damping = 0.1;  // Damping for your DLS logic
 
     xarm_geo::TaskSpaceTarget target;
     auto next_tick = std::chrono::steady_clock::now();
@@ -97,27 +97,31 @@ auto run_task_space_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model, xar
         if (hw.write(control_target) != xarm_geo::InterfaceStatus::OK) return false;
 
         t += dt;
-        next_tick += std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(dt));
+        next_tick += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(dt));
         std::this_thread::sleep_until(next_tick);
     }
     return true;
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) { std::cerr << "Usage: " << argv[0] << " <robot_ip>\n"; return 1; }
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <robot_ip>\n";
+        return 1;
+    }
     std::string robot_ip = argv[1];
 
     try {
         // --- Setup ---
-        double circle_duration = 30.0; // HALF SPEED (original was 15.0)
+        double circle_duration = 30.0;  // HALF SPEED (original was 15.0)
         double transition_time = 4.0;
 
         xarm_geo::Model model = xarm_geo::build_model(6, "XI130412C23L45");
         xarm_geo::Data data(model);
-        
+
         // Safety Walls
         xarm_geo::CollisionModel col_model = xarm_geo::build_collision_model(model, true);
-        // add_safety_enclosure(col_model); 
+        // add_safety_enclosure(col_model);
         xarm_geo::CollisionData col_data(col_model);
 
         xarm_geo::Hardware hw(model.dof, robot_ip);
@@ -130,10 +134,11 @@ int main(int argc, char *argv[]) {
         // --- Define Trajectory Anchor ---
         Eigen::VectorXd q_home = Eigen::VectorXd::Zero(model.dof);
         q_home[0] = 1.5 * std::numbers::pi;
-        
+
         double q0 = q_home[0];
         Eigen::Vector3d center(0.35 * std::cos(q0), 0.35 * std::sin(q0), 0.35);
-        xarm_geo::manifold::SO3 rot = xarm_geo::manifold::SO3::exp(Eigen::Vector3d::UnitZ() * (q0 - (1.5 * std::numbers::pi)));
+        xarm_geo::manifold::SO3 rot = xarm_geo::manifold::SO3::exp(Eigen::Vector3d::UnitZ() *
+                                                                   (q0 - (1.5 * std::numbers::pi)));
         xarm_geo::manifold::SE3 anchor(rot, center);
 
         xarm_geo::trajectories::TiltingCircle circle_traj(anchor, circle_duration);
@@ -141,14 +146,20 @@ int main(int argc, char *argv[]) {
         // --- Pre-Flight ---
         xarm_geo::TaskSpaceTarget start_target;
         circle_traj.evaluate(0.0, start_target);
-        
-        if (!xarm_geo::inverse_kinematics(model, data, col_model, col_data, q_home, start_target.pose)) {
-            std::cerr << "[ABORT] No collision-free start pose found!\n"; return 1;
+
+        if (!xarm_geo::inverse_kinematics(model, data, col_model, col_data, q_home,
+                                          start_target.pose)) {
+            std::cerr << "[ABORT] No collision-free start pose found!\n";
+            return 1;
         }
         Eigen::VectorXd q_start = data.q_out;
 
-        auto val = xarm_geo::validate_trajectory(model, data, col_model, col_data, circle_traj, circle_duration, q_start);
-        if (!val.valid) { std::cerr << "[ABORT] Safety violation: " << val.reason << "\n"; return 1; }
+        auto val = xarm_geo::validate_trajectory(model, data, col_model, col_data, circle_traj,
+                                                 circle_duration, q_start);
+        if (!val.valid) {
+            std::cerr << "[ABORT] Safety violation: " << val.reason << "\n";
+            return 1;
+        }
 
         // --- Execution ---
         std::cout << "[PHASE 0] Moving to Home... ";
@@ -166,7 +177,7 @@ int main(int argc, char *argv[]) {
         hw.read(state);
         xarm_geo::trajectories::JointPTP r_traj(state.q, q_home, transition_time);
         run_joint_ptp_hw(hw, r_traj, transition_time, state, control_target);
-        
+
         std::cout << "SUCCESS.\n";
         hw.shutdown();
 

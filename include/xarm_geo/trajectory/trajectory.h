@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <string>
 
@@ -46,15 +47,13 @@ namespace xarm_geo {
     // --- Trajectory Validation (Collision Detection) ---
 
     struct ValidationOptions {
-        int num_samples = 100;
-        int interpolation_steps = 5;
-        IKOptions ik_options = {};
+        double integration_dt = 0.002;
+        double collision_check_dt = 0.05;
     };
 
     struct ValidationResult {
         bool valid = true;
         double failure_time = -1.0;
-        int failure_sample = -1;
         std::string reason;  // Human-readable failure reason
     };
 
@@ -63,57 +62,60 @@ namespace xarm_geo {
     template <TaskSpaceTrajectory T>
     auto validate_trajectory(const Model &model, Data &data, const CollisionModel &col_model,
                              CollisionData &col_data, const T &trajectory, double duration,
-                             const Eigen::Ref<const Eigen::VectorXd> &q_seed,
+                             const Eigen::Ref<const Eigen::VectorXd> &q_start,
                              const ValidationOptions &options = {}) -> ValidationResult {
 
         ValidationResult result;
         TaskSpaceTarget target;
-        Eigen::VectorXd q_prev = q_seed;
 
-        for (int s = 0; s <= options.num_samples; ++s) {
-            double t = (static_cast<double>(s) / options.num_samples) * duration;
+        Eigen::VectorXd q_curr = q_start;
 
+        // Set Up Controller Gains
+        // TODO: Remove when Controller Function Parameter Integrated
+        double kp = 8;
+
+        // Set Up Integration & Collision Checking Loop
+        double dt = options.integration_dt;
+        int num_steps = static_cast<int>(duration / dt);
+        double last_collision_t = -options.collision_check_dt;
+
+        for (int s = 0; s <= num_steps; ++s) {
+            // Compute Current State
+            compute_jacobians(model, data, q_curr);
+
+            // Evaluate Desired Pose @ Current Timestep
+            double t = std::min(s * dt, duration);
             if (trajectory.evaluate(t, target) != TrajectoryStatus::OK) {
                 result.valid = false;
                 result.failure_time = t;
-                result.failure_sample = s;
                 result.reason = "trajectory_evaluate_failed";
                 return result;
             }
 
-            // Use Previous Solution as Seed for Collision-Aware IK
-            bool ik_ok = inverse_kinematics(model, data, col_model, col_data, q_prev, target.pose,
-                                            options.ik_options);
-            if (!ik_ok) {
-                result.valid = false;
-                result.failure_time = t;
-                result.failure_sample = s;
-                result.reason = "ik_failed_or_collision";
-                return result;
-            }
-
-            Eigen::VectorXd q_current = data.q_out;
-
-            // Check Interpolated Configurations between q_prev and q_current
-            if (s > 0 && options.interpolation_steps > 0) {
-                for (int k = 1; k < options.interpolation_steps; ++k) {
-                    double alpha = static_cast<double>(k) / options.interpolation_steps;
-                    Eigen::VectorXd q_interp = (1.0 - alpha) * q_prev + alpha * q_current;
-
-                    forward_kinematics(model, data, q_interp);
-                    update_geometry_poses(model, data, col_model, col_data);
-
-                    if (compute_collisions(col_model, col_data)) {
-                        result.valid = false;
-                        result.failure_time = t;
-                        result.failure_sample = s;
-                        result.reason = "interpolation_collision";
-                        return result;
-                    }
+            // Collision Checking
+            if ((t - last_collision_t) >= options.collision_check_dt || s == num_steps) {
+                update_geometry_poses(model, data, col_model, col_data);
+                if (compute_collisions(col_model, col_data)) {
+                    result.valid = false;
+                    result.failure_time = t;
+                    result.reason = "collision_detected";
+                    return result;
                 }
+                last_collision_t = t;  // Reset the Timer
             }
 
-            q_prev = q_current;
+            // Forward Simulate Controller Execution (If Not at Final Step)
+            // TODO: Replace w/ Controller Function Parameter (Not Hardcoded to Geometric Diff. IK)
+            if (s < num_steps) {
+                manifold::SE3 pose_err_body = data.ee_pose.inverse() * target.pose;
+                manifold::SE3::Twist twist_err_body = pose_err_body.log();
+
+                manifold::SE3::Twist target_twist_ee = pose_err_body.Ad() * target.twist;
+                manifold::SE3::Twist cmd_twist = target_twist_ee + (kp * twist_err_body);
+
+                inverse_diff_kinematics(model, data, cmd_twist);
+                q_curr += data.v_out * dt;
+            }
         }
 
         return result;
@@ -126,53 +128,29 @@ namespace xarm_geo {
 
         ValidationResult result;
         JointSpaceTarget target(model.dof);
-        Eigen::VectorXd q_prev;
 
-        for (int s = 0; s <= options.num_samples; ++s) {
-            double t = (static_cast<double>(s) / options.num_samples) * duration;
+        double dt = options.integration_dt;
+        int num_steps = static_cast<int>(duration / dt);
+
+        for (int s = 0; s <= num_steps; ++s) {
+            double t = std::min(s * dt, duration);
 
             if (trajectory.evaluate(t, target) != TrajectoryStatus::OK) {
                 result.valid = false;
                 result.failure_time = t;
-                result.failure_sample = s;
                 result.reason = "trajectory_evaluate_failed";
                 return result;
             }
 
-            Eigen::VectorXd q_current = target.q;
-
-            // Check Current Configuration
-            forward_kinematics(model, data, q_current);
+            forward_kinematics(model, data, target.q);
             update_geometry_poses(model, data, col_model, col_data);
 
             if (compute_collisions(col_model, col_data)) {
                 result.valid = false;
                 result.failure_time = t;
-                result.failure_sample = s;
-                result.reason = "collision";
+                result.reason = "collision_detected";
                 return result;
             }
-
-            // Check Interpolated Configurations between q_prev and q_current
-            if (s > 0 && options.interpolation_steps > 0) {
-                for (int k = 1; k < options.interpolation_steps; ++k) {
-                    double alpha = static_cast<double>(k) / options.interpolation_steps;
-                    Eigen::VectorXd q_interp = (1.0 - alpha) * q_prev + alpha * q_current;
-
-                    forward_kinematics(model, data, q_interp);
-                    update_geometry_poses(model, data, col_model, col_data);
-
-                    if (compute_collisions(col_model, col_data)) {
-                        result.valid = false;
-                        result.failure_time = t;
-                        result.failure_sample = s;
-                        result.reason = "interpolation_collision";
-                        return result;
-                    }
-                }
-            }
-
-            q_prev = q_current;
         }
 
         return result;

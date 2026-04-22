@@ -35,6 +35,7 @@ namespace xarm_geo {
 
         std::vector<GeomObject> geometries;
         std::vector<CollisionPair> collision_pairs;
+        std::set<std::pair<std::string, std::string>> allowed_collision_pairs;
 
         // --- Setup Helpers ---
 
@@ -42,9 +43,8 @@ namespace xarm_geo {
         auto add_geometry(const std::string &name, size_t parent_joint,
                           const manifold::SE3 &placement,
                           std::shared_ptr<coal::CollisionGeometry> geom) -> size_t;
-
-        // Populates collision_pairs while ignoring adjacent links or world-vs-world checks.
         void add_all_collision_pairs();
+        void disable_collision_pair(const std::string &link1, const std::string &link2);
     };
 
     struct CollisionData {

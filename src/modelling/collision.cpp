@@ -1,3 +1,5 @@
+#include <iostream>
+
 #include <coal/collision.h>
 #include <coal/distance.h>
 
@@ -10,26 +12,46 @@ namespace xarm_geo {
     auto CollisionModel::add_geometry(const std::string &name, size_t parent_joint,
                                       const manifold::SE3 &placement,
                                       std::shared_ptr<coal::CollisionGeometry> geom) -> size_t {
-        geometries.push_back({name, parent_joint, placement, std::move(geom)});
+
+        geometries.push_back({.name = name,
+                              .parent_joint = parent_joint,
+                              .pose = placement,
+                              .geom = std::move(geom)});
+
         return geometries.size() - 1;
     }
 
     void CollisionModel::add_all_collision_pairs() {
         collision_pairs.clear();
+
         for (size_t i = 0; i < geometries.size(); ++i) {
             for (size_t j = i + 1; j < geometries.size(); ++j) {
-                int joint_i = static_cast<int>(geometries[i].parent_joint);
-                int joint_j = static_cast<int>(geometries[j].parent_joint);
+                const auto &g1 = geometries[i];
+                const auto &g2 = geometries[j];
 
-                // Ignore if both are static environment objects
+                // Check the Allowed Collision Matrix
+                if (allowed_collision_pairs.contains({g1.name, g2.name}) ||
+                    allowed_collision_pairs.contains({g2.name, g1.name})) {
+                    continue;
+                }
+
+                int joint_i = static_cast<int>(g1.parent_joint);
+                int joint_j = static_cast<int>(g2.parent_joint);
+
+                // Ignore Static Environment
                 if (joint_i == 0 && joint_j == 0) { continue; }
 
-                // Ignore adjacent robot links
+                // Ignore Adjacent Links
                 if (std::abs(joint_i - joint_j) <= 1) { continue; }
 
-                collision_pairs.push_back({i, j});
+                collision_pairs.push_back({.obj1_idx = i, .obj2_idx = j});
             }
         }
+    }
+
+    void CollisionModel::disable_collision_pair(const std::string &link1,
+                                                const std::string &link2) {
+        allowed_collision_pairs.insert({link1, link2});
     }
 
     CollisionData::CollisionData(const CollisionModel &col_model) {
@@ -80,7 +102,11 @@ namespace xarm_geo {
             coal::collide(&col_data.collision_objects[pair.obj1_idx],
                           &col_data.collision_objects[pair.obj2_idx],
                           col_data.collision_requests[i], col_data.collision_results[i]);
-            if (col_data.collision_results[i].isCollision()) { is_colliding = true; }
+            if (col_data.collision_results[i].isCollision()) {
+                std::cout << "[COLLISION HIT] " << col_model.geometries[pair.obj1_idx].name
+                          << " and " << col_model.geometries[pair.obj2_idx].name << "\n";
+                is_colliding = true;
+            }
         }
 
         return is_colliding;

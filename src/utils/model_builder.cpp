@@ -264,7 +264,7 @@ namespace xarm_geo::internal {
                     coal::Vec3s coal_scale(scale.x(), scale.y(), scale.z());
 
                     try {
-                        auto mesh_geom = mesh_loader.load(file, coal_scale);
+                        auto mesh_geom = mesh_loader.load(file_path, coal_scale);
                         col_model.add_geometry(link_name + "_col", current_joint_idx, offset,
                                                mesh_geom);
                     } catch (const std::exception &e) {
@@ -304,19 +304,28 @@ namespace xarm_geo {
         -> CollisionModel {
         CollisionModel col_model;
 
-        // Load the geometry from the URDF
+        // Load the Geometry from the URDF
         internal::load_geometry_params(col_model, kin_model);
 
-        // Add the infinite ground plane (if requested)
+        // Inject Robot-Specific Allowed Collision Matrix (Based on Official SRDF)
+        // TODO: Add for Remaining Manipulators (xArm5, xArm7, etc.) OR Integrate SRDF Reading
+        if (kin_model.dof == 6) {
+            col_model.disable_collision_pair("link1_col", "link3_col");
+            col_model.disable_collision_pair("link2_col", "link4_col");
+            col_model.disable_collision_pair("link_base_col", "link2_col");
+            col_model.disable_collision_pair("link_base_col", "link3_col");
+            col_model.disable_collision_pair("link3_col", "link5_col");
+            col_model.disable_collision_pair("link3_col", "link6_col");
+            col_model.disable_collision_pair("link4_col", "link6_col");
+        }
+
+        // Add the Infinite Ground Plane (If Requested)
         if (add_ground_plane) {
-            // A halfspace defined by a normal vector pointing UP (0, 0, 1)
-            // and a distance of 0 along that normal.
             auto ground_geom = std::make_shared<coal::Halfspace>(coal::Vec3s(0, 0, 1), 0.0);
 
             manifold::SE3 ground_pose = manifold::SE3::Identity();
             ground_pose.r3() << 0.0, 0.0, 0.0;
 
-            // Attach it to Joint 0 (The World/Environment)
             col_model.add_geometry("ground_plane", 0, ground_pose, ground_geom);
         }
 

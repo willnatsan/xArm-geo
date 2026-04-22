@@ -1,3 +1,4 @@
+#include "xarm_geo/trajectory/trajectory.h"
 #include <chrono>
 #include <iostream>
 #include <numbers>
@@ -145,11 +146,14 @@ int main(int argc, char *argv[]) {
 
         // --- Pre-Flight ---
         xarm_geo::TaskSpaceTarget start_target;
-        circle_traj.evaluate(0.0, start_target);
+        if (circle_traj.evaluate(0.0, start_target) != xarm_geo::TrajectoryStatus::OK) {
+            std::cerr << "[ABORT] Failed to Evaluate Start Pose\n";
+            return 1;
+        }
 
         if (!xarm_geo::inverse_kinematics(model, data, col_model, col_data, q_home,
                                           start_target.pose)) {
-            std::cerr << "[ABORT] No collision-free start pose found!\n";
+            std::cerr << "[ABORT] No Collision-Free Start Pose Found!\n";
             return 1;
         }
         Eigen::VectorXd q_start = data.q_out;
@@ -157,7 +161,7 @@ int main(int argc, char *argv[]) {
         auto val = xarm_geo::validate_trajectory(model, data, col_model, col_data, circle_traj,
                                                  circle_duration, q_start);
         if (!val.valid) {
-            std::cerr << "[ABORT] Safety violation: " << val.reason << "\n";
+            std::cerr << "[ABORT] Safety Violation: " << val.reason << "\n";
             return 1;
         }
 

@@ -17,6 +17,7 @@ struct TestParams {
     int trajectory_mode = 2;
     bool show_marker = true;
     bool log_data = false;
+    bool check_trajectory = false;
 };
 
 auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::JointPTP &traj,
@@ -89,17 +90,19 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     // --- Layer 2: Pre-Flight Trajectory Validation ---
 
-    std::cout << "\n[PRE-FLIGHT] Validating Trajectory for Collision-Free Feasibility...\n";
+    if (params.check_trajectory) {
+        std::cout << "\n[PRE-FLIGHT] Validating Trajectory for Collision-Free Feasibility...\n";
 
-    auto validation = xarm_geo::validate_trajectory(model, data, col_model, col_data, trajectory,
-                                                    duration, q_start);
+        auto validation = xarm_geo::validate_trajectory(model, data, col_model, col_data,
+                                                        trajectory, duration, q_start);
+        if (!validation.valid) {
+            std::cerr << "Trajectory Validation FAILED at t=" << validation.failure_time << ": "
+                      << validation.reason << "\n";
+            return 1;
+        }
 
-    if (!validation.valid) {
-        std::cerr << "Trajectory Validation FAILED at t=" << validation.failure_time << " (Sample "
-                  << validation.failure_sample << "): " << validation.reason << "\n";
-        return 1;
+        std::cout << "[PRE-FLIGHT] Trajectory Validated!\n";
     }
-    std::cout << "[PRE-FLIGHT] Trajectory Validated!\n";
 
     // --- PHASE 1: HOME TO START ---
 
@@ -291,7 +294,8 @@ auto main(int argc, char *argv[]) -> int {
                 << "  --geometric <false|true> -> Toggle Geometric Controller (default: true)\n"
                 << "  --trajectory <0|1|2|3|4> -> Select Trajectory Mode (default: 2)\n"
                 << "  --marker <false|true> -> Show Target Marker in simulation (default: true)\n"
-                << "  --log <false|true> -> Log Data to CSV File (default: false)\n";
+                << "  --log <false|true> -> Log Data to CSV File (default: false)\n"
+                << "  --validate <false|true> -> Validate Trajectory (default: false)\n";
             return 0;
         }
 
@@ -310,6 +314,9 @@ auto main(int argc, char *argv[]) -> int {
             params.show_marker = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
         } else if (arg == "--log" && i + 1 < argc) {
             params.log_data = (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
+        } else if (arg == "--validate" && i + 1 < argc) {
+            params.check_trajectory =
+                (std::string(argv[++i]) == "1" || std::string(argv[i]) == "true");
         }
     }
 

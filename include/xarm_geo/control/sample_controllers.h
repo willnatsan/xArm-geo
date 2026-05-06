@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 #include <Eigen/Dense>
 
@@ -77,6 +78,93 @@ namespace xarm_geo {
 
     private:
         int dof_;
+
+        // --- Per-Tick Scratch (Pre-Allocated at Construction) ---
+        // Sized from model.dof; zero allocation in compute_task_wrench().
+        Eigen::LLT<Eigen::MatrixXd> M_llt_;
+        Eigen::MatrixXd M_inv_Jt_;            // (dof x 6)
+        Eigen::Matrix<double, 6, 6> lambda_;  // Operational-space inertia
+        manifold::SE3::Twist ad_xi_d_;        // Ad_{g_e} * xi_d
+        manifold::SE3::Twist d_ad_xi_d_;      // d/dt(Ad_{g_e} * xi_d)
+        manifold::SE3::Twist xi_e_;           // velocity error
+    };
+
+    // --- Geometric PI Controller (Kinematic) ---
+    //
+    // Reference: TaskSpaceTarget; Command: JointVelocity. Mixed-state integral
+    // (Goodarzi et al. 2013): integrator accumulates nabla Phi(g_e), passed
+    // through per-axis saturation for anti-windup.
+    //
+    //     xi_c     = Ad_{g_e} * xi_d - nabla Phi(g_e) - K_I * sat(e_I)
+    //     dot(e_I) = nabla Phi(g_e)
+    //
+    // Always uses the Lie-group gradient; integrating the log-map gradient is
+    // unsafe near theta=pi due to branch-cut accumulation. Caller must invoke
+    // reset() to zero the integrator state between distinct trajectories.
+
+    class GeometricPIController final : public KinematicTaskController {
+    public:
+        explicit GeometricPIController(const Model &model);
+
+        void reset() noexcept;
+
+        // --- Public Configuration ---
+        SE3TrackingGains gains;
+        bool use_feedforward = true;
+        Eigen::Vector3d sigma_lin =
+            Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
+        Eigen::Vector3d sigma_ang =
+            Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
+
+    protected:
+        auto compute_command_twist(const Model &model, Data &data, const JointState &fb,
+                                   const TaskSpaceTarget &ref, const ControllerContext &ctx,
+                                   manifold::SE3::Twist &cmd_twist) noexcept
+            -> ControllerStatus override;
+
+    private:
+        int dof_;
+        manifold::SE3::Twist e_I_ = manifold::SE3::Twist::Zero();  // integrator state
+    };
+
+    // --- Geometric PID Controller (Dynamic) ---
+    //
+    // Reference: TaskSpaceTarget; Command: JointTorque. Mixed-state integral
+    // (Goodarzi et al. 2013): integrator accumulates xi_e + c2 * nabla Phi(g_e),
+    // passed through per-axis saturation for anti-windup.
+    //
+    //     F_task   = - nabla Phi(g_e) - K_D * xi_e - K_I * sat(e_I) + F_FF
+    //     dot(e_I) = xi_e + c2 * nabla Phi(g_e)
+    //
+    // F_FF is the operational-space feedforward block (see GeometricPDController).
+    // Always uses the Lie-group gradient; integrating the log-map gradient is
+    // unsafe near theta=pi due to branch-cut accumulation. Caller must invoke
+    // reset() to zero the integrator state between distinct trajectories.
+
+    class GeometricPIDController final : public DynamicTaskController {
+    public:
+        explicit GeometricPIDController(const Model &model);
+
+        void reset() noexcept;
+
+        // --- Public Configuration ---
+        SE3TrackingGains gains;
+        bool use_feedforward = true;
+        double c2 = 0.0;  // mixed-state coupling (Goodarzi); set > 0 to enable mixing
+        Eigen::Vector3d sigma_lin =
+            Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
+        Eigen::Vector3d sigma_ang =
+            Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
+
+    protected:
+        auto compute_task_wrench(const Model &model, Data &data, const JointState &fb,
+                                 const TaskSpaceTarget &ref, const ControllerContext &ctx,
+                                 manifold::SE3::Twist &task_wrench) noexcept
+            -> ControllerStatus override;
+
+    private:
+        int dof_;
+        manifold::SE3::Twist e_I_ = manifold::SE3::Twist::Zero();  // integrator state
 
         // --- Per-Tick Scratch (Pre-Allocated at Construction) ---
         // Sized from model.dof; zero allocation in compute_task_wrench().

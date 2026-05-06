@@ -15,8 +15,10 @@ namespace xarm_geo {
     struct SE3TrackingGains {
         Eigen::Vector3d kp_pos = Eigen::Vector3d::Zero();  // K_p (linear, body frame)
         Eigen::Vector3d kp_rot = Eigen::Vector3d::Zero();  // K_R (angular, body frame)
-        Eigen::Vector3d kd_lin = Eigen::Vector3d::Zero();  // K_D linear (PD only)
-        Eigen::Vector3d kd_ang = Eigen::Vector3d::Zero();  // K_D angular (PD only)
+        Eigen::Vector3d kd_lin = Eigen::Vector3d::Zero();  // K_D linear (PD/PID only)
+        Eigen::Vector3d kd_ang = Eigen::Vector3d::Zero();  // K_D angular (PD/PID only)
+        Eigen::Vector3d ki_lin = Eigen::Vector3d::Zero();  // K_I linear (PI/PID only)
+        Eigen::Vector3d ki_ang = Eigen::Vector3d::Zero();  // K_I angular (PI/PID only)
     };
 
     // --- SE(3) Tracking: Free-Function Building Blocks ---

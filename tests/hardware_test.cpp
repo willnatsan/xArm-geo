@@ -79,8 +79,9 @@ auto run_task_space_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model, xar
         if (hw.read(state) != xarm_geo::InterfaceStatus::OK) return false;
 
         // Update kinematics and Jacobian
-        xarm_geo::forward_kinematics(model, data, state.q);
-        xarm_geo::compute_jacobians(model, data, state.q);
+        data.q = state.q;
+        xarm_geo::forward_kinematics(model, data);
+        xarm_geo::compute_jacobians(model, data);
 
         if (traj.evaluate(t, target) != xarm_geo::TrajectoryStatus::OK) return false;
 

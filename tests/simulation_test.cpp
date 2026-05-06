@@ -143,7 +143,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     while (t < duration && sim.is_running()) {
         if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { break; }
-        xarm_geo::compute_jacobians(model, data, state.q);
+        data.q = state.q;
+        xarm_geo::compute_jacobians(model, data);
 
         if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) { break; }
 
@@ -340,7 +341,8 @@ auto main(int argc, char *argv[]) -> int {
     xarm_geo::JointState state(model.dof);
     if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { return 1; }
 
-    xarm_geo::compute_jacobians(model, data, state.q);
+    data.q = state.q;
+    xarm_geo::compute_jacobians(model, data);
 
     // Creating Anchor Pose (Centre of Trajectory)
     double q0 = q_home[0];

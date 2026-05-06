@@ -125,6 +125,11 @@ set(LIB_SOURCES
         src/modelling/collision.cpp
         src/modelling/dynamics.cpp
         src/modelling/kinematics.cpp
+        src/modelling/optimal_kinematics.cpp
+        src/safety/asif.cpp
+        src/safety/barriers.cpp
+        src/safety/constraints.cpp
+        src/safety/tasks.cpp
         src/control/sample_controllers.cpp
         src/trajectory/sample_trajectories.cpp
         src/utils/model_builder.cpp

@@ -81,7 +81,8 @@ namespace xarm_geo {
 
         for (int s = 0; s <= num_steps; ++s) {
             // Compute Current State
-            compute_jacobians(model, data, q_curr);
+            data.q = q_curr;
+            compute_jacobians(model, data);
 
             // Evaluate Desired Pose @ Current Timestep
             double t = std::min(s * dt, duration);
@@ -142,7 +143,8 @@ namespace xarm_geo {
                 return result;
             }
 
-            forward_kinematics(model, data, target.q);
+            data.q = target.q;
+            forward_kinematics(model, data);
             update_geometry_poses(model, data, col_model, col_data);
 
             if (compute_collisions(col_model, col_data)) {

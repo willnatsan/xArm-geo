@@ -2,14 +2,13 @@
 
 namespace xarm_geo {
     void forward_dynamics(const Model &model, Data &data,
-                          const Eigen::Ref<const Eigen::VectorXd> &q,
                           const Eigen::Ref<const Eigen::VectorXd> &v,
                           const Eigen::Ref<const Eigen::VectorXd> &tau,
                           const manifold::SE3::Wrench &ee_wrench) {
 
         // Compute Bias Forces & Mass Matrix
-        compute_bias_forces(model, data, q, v, ee_wrench);
-        compute_mass_matrix(model, data, q);
+        compute_bias_forces(model, data, v, ee_wrench);
+        compute_mass_matrix(model, data);
 
         // Rearrange Dynamics Equation to solve for Joint Accelerations
         // tau = M(q) * a + h
@@ -21,14 +20,18 @@ namespace xarm_geo {
     };
 
     void inverse_dynamics(const Model &model, Data &data,
-                          const Eigen::Ref<const Eigen::VectorXd> &q,
                           const Eigen::Ref<const Eigen::VectorXd> &v,
                           const Eigen::Ref<const Eigen::VectorXd> &a,
                           const manifold::SE3::Wrench &ee_wrench) {
 
-        // --- Initial Conditions (Assuming Gravity Term is Compensated Externally) ---
+        // --- Initial Conditions ---
+        // Setting a_links[0] = (-g, 0) folds gravity into RNEA. With
+        // model.gravity == 0 (default) this matches the externally-compensated
+        // convention.
         data.rnea.v_links[0] = manifold::SE3::Twist::Zero();
-        data.rnea.a_links[0] = manifold::SE3::SpatialAcceleration::Zero();
+        manifold::SE3::SpatialAcceleration a0 = manifold::SE3::SpatialAcceleration::Zero();
+        a0.head<3>() = -model.gravity;
+        data.rnea.a_links[0] = a0;
 
         // --- Forward Pass (Iterate through moving links 1 to model.dof) ---
         for (int i = 0; i < model.dof; ++i) {
@@ -85,33 +88,61 @@ namespace xarm_geo {
         }
     }
 
-    void compute_mass_matrix(const Model &model, Data &data,
-                             const Eigen::Ref<const Eigen::VectorXd> &q) {
+    void compute_mass_matrix(const Model &model, Data &data) {
 
-        // Evaluating the Inverse Dynamics w/ Zero Joint Velocities + Unit Joint Accelerations
-        // The equation simplifies to: tau = M(q) * a
-        for (int i = 0; i < model.dof; ++i) {
-            data.crba.a_ei[i] = 1.0;
+        // Composite Rigid Body Algorithm (Featherstone), body-frame variant.
+        // Convention: joint i drives link i+1; link k's parent is link k-1.
+        // Requires pose_tree_local to be up-to-date (call forward_kinematics
+        // or compute_jacobians first). M is symmetric by construction.
 
-            // Resulting Joint Torque equals i-th column of Mass Matrix
-            inverse_dynamics(model, data, q, data.crba.v_zero, data.crba.a_ei);
-            data.M.col(i) = data.tau_out;
+        const int dof = model.dof;
 
-            data.crba.a_ei[i] = 0.0;  // Reset for next iteration
+        // Cache Child-to-Parent Transforms (Index k-1 -> link k frame to link k-1 frame)
+        for (int k = 1; k <= dof; ++k) {
+            data.rnea.T_i_parent_cache[k - 1] = data.pose_tree_local[k].inverse();
         }
 
-        // Enforcing Symmetry for Numerical Stability
-        data.M = 0.5 * (data.M + data.M.transpose());
+        // Seed Composite Inertias w/ Each Link's Spatial Inertia
+        for (int i = 0; i < dof; ++i) {
+            data.crba.I_C[i] = model.spatial_inertias_link[i];
+        }
+
+        // Leaves-to-Base Composite-Inertia Accumulation
+        // I_C[parent] += Ad^T * I_C[child] * Ad
+        for (int k = dof; k >= 2; --k) {
+            const auto Ad = data.rnea.T_i_parent_cache[k - 1].Ad();
+            data.crba.I_C[k - 2].noalias() += Ad.transpose() * data.crba.I_C[k - 1] * Ad;
+        }
+
+        // Write Columns of M (Wrench F = I_C[i+1] * S_i, transported up the chain)
+        data.M.setZero();
+        for (int i = 0; i < dof; ++i) {
+            data.crba.F_scratch.coeffs.noalias() =
+                data.crba.I_C[i] * model.screw_axes_local[i];
+
+            // Diagonal Entry
+            data.M(i, i) = data.crba.F_scratch.coeffs.dot(model.screw_axes_local[i]);
+
+            // Off-Diagonals: Transport F up the chain, dot w/ each ancestor's screw
+            for (int j = i; j >= 1; --j) {
+                const auto Ad_T = data.rnea.T_i_parent_cache[j].Ad().transpose();
+                data.crba.F_scratch.coeffs = Ad_T * data.crba.F_scratch.coeffs;
+
+                const double m_ij = data.crba.F_scratch.coeffs.dot(model.screw_axes_local[j - 1]);
+                data.M(i, j - 1) = m_ij;
+                data.M(j - 1, i) = m_ij;
+            }
+        }
     };
 
     void compute_bias_forces(const Model &model, Data &data,
-                             const Eigen::Ref<const Eigen::VectorXd> &q,
                              const Eigen::Ref<const Eigen::VectorXd> &v,
                              const manifold::SE3::Wrench &ee_wrench) {
 
         // Evaluating the Inverse Dynamics w/ Zero Joint Accelerations
         // The equation simplifies to: tau = h(q, v)
-        inverse_dynamics(model, data, q, v, data.crba.a_zero, ee_wrench);
+        // (h includes gravity when `model.gravity` is non-zero)
+        inverse_dynamics(model, data, v, data.bias.a_zero, ee_wrench);
 
         // Store resulting Joint Torques as the Bias Forces `h`
         data.h = data.tau_out;

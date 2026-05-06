@@ -1,4 +1,5 @@
 #include <iostream>
+#include <limits>
 #include <numbers>
 
 #include <coal/mesh_loader/loader.h>
@@ -158,6 +159,8 @@ namespace xarm_geo::internal {
             limits_curr.q_min = limit->DoubleAttribute("lower", -2 * std::numbers::pi);
             limits_curr.q_max = limit->DoubleAttribute("upper", 2 * std::numbers::pi);
             limits_curr.q_vel_max = limit->DoubleAttribute("velocity", std::numbers::pi);
+            limits_curr.tau_max =
+                limit->DoubleAttribute("effort", std::numeric_limits<double>::infinity());
             model.limits.push_back(limits_curr);
 
             const tinyxml2::XMLElement *child_link = child->FirstChildElement("child");

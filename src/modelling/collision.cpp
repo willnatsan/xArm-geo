@@ -1,5 +1,3 @@
-#include <iostream>
-
 #include <coal/collision.h>
 #include <coal/distance.h>
 
@@ -102,11 +100,7 @@ namespace xarm_geo {
             coal::collide(&col_data.collision_objects[pair.obj1_idx],
                           &col_data.collision_objects[pair.obj2_idx],
                           col_data.collision_requests[i], col_data.collision_results[i]);
-            if (col_data.collision_results[i].isCollision()) {
-                std::cout << "[COLLISION HIT] " << col_model.geometries[pair.obj1_idx].name
-                          << " and " << col_model.geometries[pair.obj2_idx].name << "\n";
-                is_colliding = true;
-            }
+            if (col_data.collision_results[i].isCollision()) { is_colliding = true; }
         }
 
         return is_colliding;

@@ -1,8 +1,13 @@
+#include <random>
+
 #include <xarm_geo/core/system.h>
 
 namespace xarm_geo {
-    Data::Data(const Model &model) {
+    Data::Data(const Model &model) : rng(std::random_device{}()) {
         int dof = model.dof;
+
+        // --- Canonical Robot State ---
+        q.setZero(dof);
 
         // --- Kinematics Outputs ---
         pose_tree.resize(dof + 2, manifold::SE3::Identity());
@@ -32,9 +37,51 @@ namespace xarm_geo {
         rnea.f_links.resize(dof + 2, manifold::SE3::Wrench());
         rnea.T_i_parent_cache.resize(dof + 1, manifold::SE3::Identity());
 
+        // --- Internal Bias-Force Workspace ---
+        bias.a_zero.setZero(dof);
+
         // --- Internal CRBA Workspace ---
-        crba.v_zero.setZero(dof);
-        crba.a_zero.setZero(dof);
-        crba.a_ei.setZero(dof);
+        crba.I_C.assign(dof, manifold::SE3::SpatialInertia::Zero());
+        crba.F_scratch = manifold::SE3::Wrench();
+
+        // --- Internal Collision Workspace ---
+        collision.point_jacobian_1.setZero(3, dof);
+        collision.point_jacobian_2.setZero(3, dof);
+
+        // --- Internal OptIK Workspace ---
+        // Note: H/g are sized to dof; A/l/u start empty and grow on demand
+        // when the first set of constraints/barriers is registered.
+        optik.H.setZero(dof, dof);
+        optik.g.setZero(dof);
+        optik.A.resize(0, dof);
+        optik.l.resize(0);
+        optik.u.resize(0);
+
+        // Pre-Allocate Per-Task Scratch (FrameTask Default: 6 rows for SE(3))
+        optik.J_task.setZero(6, dof);
+        optik.e_task.setZero(6);
+
+        optik.qp.reset();  // Lazy-init on first solve
+        optik.current_n = 0;
+        optik.current_m_eq = 0;
+        optik.current_m_in = 0;
+        optik.initialised = false;
+
+        // --- Internal ASIF Workspace ---
+        asif.H.setZero(dof, dof);
+        asif.g.setZero(dof);
+        asif.A.resize(0, dof);
+        asif.l.resize(0);
+        asif.u.resize(0);
+
+        asif.M_llt = Eigen::LLT<Eigen::MatrixXd>(dof);
+        asif.M_inv.setZero(dof, dof);
+        asif.M_inv_h.setZero(dof);
+
+        asif.qp.reset();
+        asif.current_n = 0;
+        asif.current_m_eq = 0;
+        asif.current_m_in = 0;
+        asif.initialised = false;
     }
 }  // namespace xarm_geo

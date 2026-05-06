@@ -45,8 +45,7 @@ namespace xarm_geo {
                "body_jacobian not sized for model.dof; run compute_jacobians first");
         assert(data.M.rows() == model.dof && data.M.cols() == model.dof &&
                "data.M not populated; run compute_mass_matrix first");
-        assert(data.h.size() == model.dof &&
-               "data.h not populated; run compute_bias_forces first");
+        assert(data.h.size() == model.dof && "data.h not populated; run compute_bias_forces first");
 
         const int dof = model.dof;
         auto &ws = data.asif;
@@ -220,13 +219,9 @@ namespace xarm_geo {
         ASIFOptions opts_eff = opts;
         if (opts_eff.tau_max.size() != model.dof) {
             opts_eff.tau_max.resize(model.dof);
-            for (int i = 0; i < model.dof; ++i) {
-                opts_eff.tau_max[i] = model.limits[i].tau_max;
-            }
+            for (int i = 0; i < model.dof; ++i) { opts_eff.tau_max[i] = model.limits[i].tau_max; }
         }
-        if (opts_eff.tau_min.size() != model.dof) {
-            opts_eff.tau_min = -opts_eff.tau_max;
-        }
+        if (opts_eff.tau_min.size() != model.dof) { opts_eff.tau_min = -opts_eff.tau_max; }
 
         return asif_filter(model, data, &col_model, &col_data, v, tau_des, barriers, tau_safe,
                            opts_eff);

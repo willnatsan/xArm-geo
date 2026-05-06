@@ -76,8 +76,7 @@ namespace xarm_geo {
         data.frame_jacobian = T_rot_only.Ad() * data.body_jacobian;
     };
 
-    void compute_point_jacobian(const Model &model, const Data &data,
-                                std::size_t parent_joint,
+    void compute_point_jacobian(const Model &model, const Data &data, std::size_t parent_joint,
                                 const Eigen::Ref<const Eigen::Vector3d> &p_world,
                                 Eigen::Ref<Eigen::MatrixXd> J_out) {
 

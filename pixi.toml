@@ -105,4 +105,3 @@ install-hooks = "pre-commit install"
 [environments]
 # Creates an isolated 'lint' environment
 lint = { features = ["lint"], no-default-feature = true }
-

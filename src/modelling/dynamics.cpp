@@ -24,9 +24,7 @@ namespace xarm_geo {
         // Solve for Joint Accelerations w/ Cholesky Decomposition
         Eigen::LLT<Eigen::MatrixXd> M_llt(data.M);
 
-        if (M_llt.info() != Eigen::Success) {
-            debug::log("Cholesky failed on data.M (not PD)");
-        }
+        if (M_llt.info() != Eigen::Success) { debug::log("Cholesky failed on data.M (not PD)"); }
 
         data.a_out = M_llt.solve(tau_diff);
     };

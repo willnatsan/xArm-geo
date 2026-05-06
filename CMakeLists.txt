@@ -130,6 +130,7 @@ set(LIB_SOURCES
         src/safety/barriers.cpp
         src/safety/constraints.cpp
         src/safety/tasks.cpp
+        src/control/admittance.cpp
         src/control/sample_controllers.cpp
         src/trajectory/sample_trajectories.cpp
         src/utils/model_builder.cpp

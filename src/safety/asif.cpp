@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <iostream>
 #include <limits>
 
 #include <proxsuite/proxqp/dense/dense.hpp>
@@ -9,6 +8,7 @@
 #include <xarm_geo/modelling/dynamics.h>
 #include <xarm_geo/modelling/kinematics.h>
 #include <xarm_geo/safety/asif.h>
+#include <xarm_geo/utils/debug.h>
 
 namespace xarm_geo {
 
@@ -55,9 +55,7 @@ namespace xarm_geo {
 
         ws.M_llt.compute(data.M);
         if (ws.M_llt.info() != Eigen::Success) {
-#ifndef NDEBUG
-            std::cerr << "[xarm_geo::asif_filter] Cholesky failed on data.M (not PD).\n";
-#endif
+            debug::log("Cholesky failed on data.M (not PD)");
             return ASIFStatus::ERROR;  // M not PD (numerics or bad model)
         }
 

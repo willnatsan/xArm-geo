@@ -1,7 +1,7 @@
 #include <cassert>
-#include <iostream>
 
 #include <xarm_geo/modelling/dynamics.h>
+#include <xarm_geo/utils/debug.h>
 
 namespace xarm_geo {
     void forward_dynamics(const Model &model, Data &data,
@@ -23,11 +23,11 @@ namespace xarm_geo {
 
         // Solve for Joint Accelerations w/ Cholesky Decomposition
         Eigen::LLT<Eigen::MatrixXd> M_llt(data.M);
-#ifndef NDEBUG
+
         if (M_llt.info() != Eigen::Success) {
-            std::cerr << "[xarm_geo::forward_dynamics] Cholesky failed on data.M (not PD).\n";
+            debug::log("Cholesky failed on data.M (not PD)");
         }
-#endif
+
         data.a_out = M_llt.solve(tau_diff);
     };
 

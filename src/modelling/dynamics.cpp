@@ -1,3 +1,6 @@
+#include <cassert>
+#include <iostream>
+
 #include <xarm_geo/modelling/dynamics.h>
 
 namespace xarm_geo {
@@ -5,6 +8,9 @@ namespace xarm_geo {
                           const Eigen::Ref<const Eigen::VectorXd> &v,
                           const Eigen::Ref<const Eigen::VectorXd> &tau,
                           const manifold::SE3::Wrench &ee_wrench) {
+
+        assert(v.size() == model.dof && "v size must equal model.dof");
+        assert(tau.size() == model.dof && "tau size must equal model.dof");
 
         // Compute Bias Forces & Mass Matrix
         compute_bias_forces(model, data, v, ee_wrench);
@@ -16,13 +22,24 @@ namespace xarm_geo {
         Eigen::VectorXd tau_diff = tau - data.h;
 
         // Solve for Joint Accelerations w/ Cholesky Decomposition
-        data.a_out = data.M.llt().solve(tau_diff);
+        Eigen::LLT<Eigen::MatrixXd> M_llt(data.M);
+#ifndef NDEBUG
+        if (M_llt.info() != Eigen::Success) {
+            std::cerr << "[xarm_geo::forward_dynamics] Cholesky failed on data.M (not PD).\n";
+        }
+#endif
+        data.a_out = M_llt.solve(tau_diff);
     };
 
     void inverse_dynamics(const Model &model, Data &data,
                           const Eigen::Ref<const Eigen::VectorXd> &v,
                           const Eigen::Ref<const Eigen::VectorXd> &a,
                           const manifold::SE3::Wrench &ee_wrench) {
+
+        assert(v.size() == model.dof && "v size must equal model.dof");
+        assert(a.size() == model.dof && "a size must equal model.dof");
+        assert(static_cast<int>(data.pose_tree_local.size()) == model.dof + 2 &&
+               "pose_tree_local not populated; run forward_kinematics first");
 
         // --- Initial Conditions ---
         // Setting a_links[0] = (-g, 0) folds gravity into RNEA. With
@@ -90,6 +107,9 @@ namespace xarm_geo {
 
     void compute_mass_matrix(const Model &model, Data &data) {
 
+        assert(static_cast<int>(data.pose_tree_local.size()) == model.dof + 2 &&
+               "pose_tree_local not populated; run forward_kinematics first");
+
         // Composite Rigid Body Algorithm (Featherstone), body-frame variant.
         // Convention: joint i drives link i+1; link k's parent is link k-1.
         // Requires pose_tree_local to be up-to-date (call forward_kinematics
@@ -103,9 +123,7 @@ namespace xarm_geo {
         }
 
         // Seed Composite Inertias w/ Each Link's Spatial Inertia
-        for (int i = 0; i < dof; ++i) {
-            data.crba.I_C[i] = model.spatial_inertias_link[i];
-        }
+        for (int i = 0; i < dof; ++i) { data.crba.I_C[i] = model.spatial_inertias_link[i]; }
 
         // Leaves-to-Base Composite-Inertia Accumulation
         // I_C[parent] += Ad^T * I_C[child] * Ad
@@ -117,8 +135,7 @@ namespace xarm_geo {
         // Write Columns of M (Wrench F = I_C[i+1] * S_i, transported up the chain)
         data.M.setZero();
         for (int i = 0; i < dof; ++i) {
-            data.crba.F_scratch.coeffs.noalias() =
-                data.crba.I_C[i] * model.screw_axes_local[i];
+            data.crba.F_scratch.coeffs.noalias() = data.crba.I_C[i] * model.screw_axes_local[i];
 
             // Diagonal Entry
             data.M(i, i) = data.crba.F_scratch.coeffs.dot(model.screw_axes_local[i]);
@@ -138,6 +155,8 @@ namespace xarm_geo {
     void compute_bias_forces(const Model &model, Data &data,
                              const Eigen::Ref<const Eigen::VectorXd> &v,
                              const manifold::SE3::Wrench &ee_wrench) {
+
+        assert(v.size() == model.dof && "v size must equal model.dof");
 
         // Evaluating the Inverse Dynamics w/ Zero Joint Accelerations
         // The equation simplifies to: tau = h(q, v)

@@ -14,6 +14,8 @@ namespace xarm_geo {
     // Note: `forward_kinematics()` must be called beforehand to populate
     //       `pose_tree_local` (!)
     // Note: `ee_wrench` must be expressed in the End-Effector Frame (!)
+    // Note: gravity defaults to zero (assumes external compensation, e.g.
+    //       xArm SDK). Set `model.gravity = (0, 0, -9.81)` for torque-mode use.
 
     void forward_dynamics(const Model &model, Data &data,
                           const Eigen::Ref<const Eigen::VectorXd> &v,

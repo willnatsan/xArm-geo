@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cassert>
 #include <cmath>
+#include <iostream>
 #include <limits>
 
 #include <proxsuite/proxqp/dense/dense.hpp>
@@ -36,6 +38,16 @@ namespace xarm_geo {
                      std::span<const DynamicBarrier *const> barriers,
                      Eigen::Ref<Eigen::VectorXd> tau_safe, const ASIFOptions &opts) -> ASIFStatus {
 
+        assert(v.size() == model.dof && "v size must equal model.dof");
+        assert(tau_des.size() == model.dof && "tau_des size must equal model.dof");
+        assert(tau_safe.size() == model.dof && "tau_safe size must equal model.dof");
+        assert(data.body_jacobian.cols() == model.dof &&
+               "body_jacobian not sized for model.dof; run compute_jacobians first");
+        assert(data.M.rows() == model.dof && data.M.cols() == model.dof &&
+               "data.M not populated; run compute_mass_matrix first");
+        assert(data.h.size() == model.dof &&
+               "data.h not populated; run compute_bias_forces first");
+
         const int dof = model.dof;
         auto &ws = data.asif;
 
@@ -43,10 +55,14 @@ namespace xarm_geo {
 
         ws.M_llt.compute(data.M);
         if (ws.M_llt.info() != Eigen::Success) {
+#ifndef NDEBUG
+            std::cerr << "[xarm_geo::asif_filter] Cholesky failed on data.M (not PD).\n";
+#endif
             return ASIFStatus::ERROR;  // M not PD (numerics or bad model)
         }
 
         // M_inv = M^-1 * I (full dof x dof). Barriers read rows of this.
+        // O(n^3) per call; acceptable for <=7 DOF.
         ws.M_inv = ws.M_llt.solve(Eigen::MatrixXd::Identity(dof, dof));
         ws.M_inv_h = ws.M_llt.solve(data.h);
 
@@ -226,9 +242,16 @@ namespace xarm_geo {
                        const Eigen::Ref<const Eigen::VectorXd> &tau_safe, double dt,
                        std::span<const DynamicBarrier *const> barriers, double tolerance) -> bool {
 
+        assert(v.size() == model.dof && "v size must equal model.dof");
+        assert(tau_safe.size() == model.dof && "tau_safe size must equal model.dof");
+        assert(dt > 0.0 && "asif_validate::dt must be positive");
+
         // Predicted next-state acceleration uses live_data's cached LLT
         // (already factorised by the most recent asif_filter call -- avoid
         // factorising twice).
+        //
+        // Single-step Euler integrator (tau held constant over dt). Suitable
+        // for fast loops (e.g. 2 ms); degrades for larger dt.
         const Eigen::VectorXd a = live_data.asif.M_llt.solve(tau_safe - live_data.h);
         const Eigen::VectorXd v_next = v + a * dt;
         const Eigen::VectorXd q_next = live_data.q + v * dt + 0.5 * a * (dt * dt);

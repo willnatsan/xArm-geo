@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cassert>
 #include <random>
 
 #include <xarm_geo/modelling/kinematics.h>
@@ -6,6 +7,8 @@
 namespace xarm_geo {
 
     void forward_kinematics(const Model &model, Data &data) {
+
+        assert(data.q.size() == model.dof && "data.q size must equal model.dof");
 
         const auto &q = data.q;
 
@@ -31,6 +34,8 @@ namespace xarm_geo {
     void forward_kinematics(const Model &model, Data &data,
                             const Eigen::Ref<const Eigen::VectorXd> &v) {
 
+        assert(v.size() == model.dof && "v size must equal model.dof");
+
         compute_jacobians(model, data);
 
         data.space_twist = data.space_jacobian * v;
@@ -39,6 +44,8 @@ namespace xarm_geo {
     };
 
     void compute_jacobians(const Model &model, Data &data) {
+
+        assert(data.q.size() == model.dof && "data.q size must equal model.dof");
 
         const auto &q = data.q;
 
@@ -69,10 +76,15 @@ namespace xarm_geo {
         data.frame_jacobian = T_rot_only.Ad() * data.body_jacobian;
     };
 
-    void compute_point_jacobian(const Model & /*model*/, const Data &data,
+    void compute_point_jacobian(const Model &model, const Data &data,
                                 std::size_t parent_joint,
                                 const Eigen::Ref<const Eigen::Vector3d> &p_world,
                                 Eigen::Ref<Eigen::MatrixXd> J_out) {
+
+        assert(parent_joint <= static_cast<std::size_t>(model.dof) &&
+               "parent_joint must be in [0, model.dof]");
+        assert(J_out.rows() == 3 && J_out.cols() == model.dof &&
+               "J_out must be sized (3 x model.dof)");
 
         J_out.setZero();
 
@@ -97,6 +109,9 @@ namespace xarm_geo {
     void inverse_diff_kinematics(const Model &model, Data &data,
                                  const manifold::SE3::Twist &target_twist,
                                  const IKOptions &options) {
+
+        assert(data.body_jacobian.cols() == model.dof &&
+               "body_jacobian not sized for model.dof; run compute_jacobians first");
 
         const auto &J = data.body_jacobian;  // Alias for brevity
 
@@ -133,6 +148,9 @@ namespace xarm_geo {
                             const Eigen::Ref<const Eigen::VectorXd> &q_init,
                             const manifold::SE3 &target_pose, const IKOptions &options) -> bool {
 
+        assert(q_init.size() == model.dof && "q_init size must equal model.dof");
+        assert(options.dt > 0.0 && "IKOptions::dt must be positive");
+
         // Initialise the Current Guess from the Initial Starting Configuration
         data.q_guess = q_init;
 
@@ -151,8 +169,9 @@ namespace xarm_geo {
                 if (V_err.norm() < options.tolerance) { return true; }
 
                 // If Not Converged -> Compute Joint Step & Apply
+                // (data.v_out is rad/s; integrate over options.dt to get a Δq step)
                 inverse_diff_kinematics(model, data, V_err, options);
-                data.q_out += data.v_out;
+                data.q_out += data.v_out * options.dt;
 
                 for (int i = 0; i < model.dof; ++i) {
                     // Wrap Joint Angle to [midpoint - pi, midpoint + pi]
@@ -181,6 +200,12 @@ namespace xarm_geo {
                             const Eigen::Ref<const Eigen::VectorXd> &q_init,
                             const manifold::SE3 &target_pose, const IKOptions &options) -> bool {
 
+        assert(q_init.size() == model.dof && "q_init size must equal model.dof");
+        assert(options.dt > 0.0 && "IKOptions::dt must be positive");
+
+        // Post-hoc collision check only (iterates may pass through collisions).
+        // For true avoidance, use optimal_inverse_kinematics.
+
         // Initialise the Current Guess from the Initial Starting Configuration
         data.q_guess = q_init;
 
@@ -203,8 +228,9 @@ namespace xarm_geo {
                 }
 
                 // If Not Converged -> Compute Joint Step & Apply
+                // (data.v_out is rad/s; integrate over options.dt to get a Δq step)
                 inverse_diff_kinematics(model, data, V_err, options);
-                data.q_out += data.v_out;
+                data.q_out += data.v_out * options.dt;
 
                 for (int i = 0; i < model.dof; ++i) {
                     // Wrap Joint Angle to [midpoint - pi, midpoint + pi]

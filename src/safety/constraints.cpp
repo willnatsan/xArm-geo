@@ -1,3 +1,4 @@
+#include <cassert>
 #include <limits>
 
 #include <xarm_geo/safety/constraints.h>
@@ -10,6 +11,8 @@ namespace xarm_geo {
     void VelocityLimit::compute(const Model &model, Data & /*data*/, Eigen::Ref<Eigen::MatrixXd> G,
                                 Eigen::Ref<Eigen::VectorXd> l,
                                 Eigen::Ref<Eigen::VectorXd> u) const {
+
+        assert(dt > 0.0 && "VelocityLimit::dt must be positive");
 
         G.setIdentity();
 

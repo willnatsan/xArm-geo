@@ -22,6 +22,8 @@ namespace xarm_geo {
     // --- PostureTask ---
     // Joint-Space Tracking: J = I, e = q_ref - q_curr.
     // If q_curr has not been refreshed (size mismatch), fall back to e = q_ref.
+    // The fallback is deliberate (lets the user defer setting q_curr) -- not an
+    // assert -- but callers should refresh q_curr each tick for correct behaviour.
 
     void PostureTask::compute(const Model & /*model*/, Data & /*data*/,
                               Eigen::Ref<Eigen::MatrixXd> J, Eigen::Ref<Eigen::VectorXd> e) const {

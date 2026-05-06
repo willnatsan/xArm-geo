@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cassert>
 #include <random>
 
 #include <proxsuite/proxqp/dense/dense.hpp>
@@ -73,6 +74,9 @@ namespace xarm_geo {
                                          std::span<const Constraint *const> constraints,
                                          std::span<const KinematicBarrier *const> barriers,
                                          const OptimalIKOptions &opts) -> OptimalIKStatus {
+
+        assert(opts.dt > 0.0 && "OptimalIKOptions::dt must be positive");
+        assert(data.q.size() == model.dof && "data.q size must equal model.dof");
 
         const int dof = model.dof;
         auto &ws = data.optik;
@@ -248,6 +252,9 @@ namespace xarm_geo {
                                     const Eigen::Ref<const Eigen::VectorXd> &q_init,
                                     const manifold::SE3 &target_pose, const OptimalIKOptions &opts)
         -> bool {
+
+        assert(q_init.size() == model.dof && "q_init size must equal model.dof");
+        assert(opts.dt > 0.0 && "OptimalIKOptions::dt must be positive");
 
         const double step_dt = (opts.dt > 0.0) ? opts.dt : 1.0;
 

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <limits>
 
@@ -17,6 +18,9 @@ namespace xarm_geo {
                                   const CollisionModel * /*col_model*/,
                                   const CollisionData * /*col_data*/, Eigen::Ref<Eigen::MatrixXd> G,
                                   Eigen::Ref<Eigen::VectorXd> b) const {
+
+        assert(dt > 0.0 && "PositionBarrier::dt must be positive");
+        assert(data.q.size() == model.dof && "data.q size must equal model.dof");
 
         G.setZero();
 
@@ -48,6 +52,8 @@ namespace xarm_geo {
     void CollisionBarrier::compute(const Model &model, Data &data, const CollisionModel *col_model,
                                    const CollisionData *col_data, Eigen::Ref<Eigen::MatrixXd> G,
                                    Eigen::Ref<Eigen::VectorXd> b) const {
+
+        assert(dt > 0.0 && "CollisionBarrier::dt must be positive");
 
         if (col_model == nullptr || col_data == nullptr) {
             G.setZero();
@@ -215,6 +221,9 @@ namespace xarm_geo {
 
             const Eigen::RowVectorXd J_h = n.transpose() * (J_p2 - J_p1);
 
+            // Approximation: drops the J_h_dot * v term in ḧ. Standard
+            // manipulator-CBF approximation; alpha_0 / alpha_1 must be tuned
+            // conservatively to absorb its effect.
             A.row(k) = -(J_h * M_inv);
 
             const double h_k = d_k - activation_distance;

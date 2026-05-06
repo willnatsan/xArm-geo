@@ -10,7 +10,8 @@ namespace xarm_geo {
         double tolerance = 1e-4;     // Convergence Threshold for IK
         double max_iters = 50;       // Maximum Iterations for IK
         double max_restarts = 10;    // Maximum Restart Attempts for IK
-        bool apply_scaling = false;  // Apply Joint velocity Scaling
+        double dt = 1.0;             // Step Size: q_out += v_out * dt (rad/s -> rad)
+        bool apply_scaling = false;  // Apply Joint Velocity Scaling
     };
 
     // --- Kinematics ---
@@ -27,6 +28,9 @@ namespace xarm_geo {
     // robot state -- a user often wants to seed IK from a "home" configuration
     // rather than from wherever the robot currently is. The result is written
     // to `data.q_out`; `data.q` is not modified.
+    //
+    // Units: `data.v_out` is always joint velocity (rad/s). The position-level
+    // IK loop integrates as `q_out += v_out * options.dt`.
 
     void forward_kinematics(const Model &model, Data &data);
 
@@ -58,7 +62,10 @@ namespace xarm_geo {
                             const manifold::SE3 &target_pose,
                             const IKOptions &options = IKOptions()) -> bool;
 
-    // Note: Overloaded IK w/ Collision Detection
+    // Note: Overloaded IK w/ Collision Detection.
+    // Post-hoc check only (the converged pose is verified collision-free, but
+    // intermediate iterates may pass through collisions). For true avoidance
+    // during iteration, use `optimal_inverse_kinematics`.
     auto inverse_kinematics(const Model &model, Data &data, const CollisionModel &col_model,
                             CollisionData &col_data,
                             const Eigen::Ref<const Eigen::VectorXd> &q_init,

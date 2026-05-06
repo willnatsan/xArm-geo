@@ -71,7 +71,9 @@ namespace xarm_geo {
         Eigen::VectorXd q_curr = q_start;
 
         // Set Up Controller Gains
-        // TODO: Remove when Controller Function Parameter Integrated
+        // Hard-coded geometric controller; validation is only representative
+        // if the runtime controller resembles this template.
+        // TODO: promote the controller to a template parameter.
         double kp = 8;
 
         // Set Up Integration & Collision Checking Loop
@@ -106,7 +108,6 @@ namespace xarm_geo {
             }
 
             // Forward Simulate Controller Execution (If Not at Final Step)
-            // TODO: Replace w/ Controller Function Parameter (Not Hardcoded to Geometric Diff. IK)
             if (s < num_steps) {
                 manifold::SE3 pose_err_body = data.ee_pose.inverse() * target.pose;
                 manifold::SE3::Twist twist_err_body = pose_err_body.log();

@@ -1,3 +1,4 @@
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <numbers>
@@ -40,6 +41,8 @@ namespace xarm_geo::internal {
             model.home_pose_tree.emplace_back(pose_curr);
 
             // Screw Axis for Revolute Z-axis Joint: Transform Local Z-axis to Spatial Frame
+            // Assumes joint axis = local Z (true for all xArm variants; URDFs
+            // with non-Z <axis xyz=...> attributes will be silently incorrect).
             manifold::SE3::Twist S_local_z = manifold::SE3::Twist::Zero();
             S_local_z.tail<3>() = Eigen::Vector3d::UnitZ();
             model.screw_axes_space.emplace_back(pose_curr.Ad() * S_local_z);
@@ -177,6 +180,22 @@ namespace xarm_geo::internal {
             std::cerr << "Warning: URDF contained fewer revolute joints (" << joint_idx
                       << ") than DOF (" << model.dof << ")." << "\n";
         }
+
+        // Warn (once) if any joint lacked an <effort> attribute. ASIF and any
+        // torque-mode controller will be unbounded on those joints.
+        bool any_inf_tau = false;
+        for (const auto &lim : model.limits) {
+            if (!std::isfinite(lim.tau_max)) {
+                any_inf_tau = true;
+                break;
+            }
+        }
+        if (any_inf_tau) {
+            std::cerr << "Warning: URDF " << urdf_file
+                      << " has joints without <limit effort=...>; tau_max defaulted to +inf. "
+                         "ASIF / torque controllers will not enforce torque bounds on these joints."
+                      << "\n";
+        }
     }
 
     void load_geometry_params(CollisionModel &col_model, const Model &kin_model) {
@@ -311,7 +330,8 @@ namespace xarm_geo {
         internal::load_geometry_params(col_model, kin_model);
 
         // Inject Robot-Specific Allowed Collision Matrix (Based on Official SRDF)
-        // TODO: Add for Remaining Manipulators (xArm5, xArm7, etc.) OR Integrate SRDF Reading
+        // xArm6 only; other variants will see spurious self-collision pairs.
+        // TODO: replace with SRDF parsing for general support.
         if (kin_model.dof == 6) {
             col_model.disable_collision_pair("link1_col", "link3_col");
             col_model.disable_collision_pair("link2_col", "link4_col");

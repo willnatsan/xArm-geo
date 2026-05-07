@@ -92,8 +92,8 @@ namespace xarm_geo {
 
             // Project Child Wrench to Current Link Frame
             auto Ad_T_child = data.rnea.T_i_parent_cache[i + 1].Ad();
-            manifold::SE3::Wrench F_child_pulled_back(Ad_T_child.transpose() *
-                                                      data.rnea.f_links[child_idx].coeffs);
+            manifold::SE3::Wrench F_child_pulled_back =
+                Ad_T_child.transpose() * data.rnea.f_links[child_idx];
 
             // Compute Total Wrench on Link i
             data.rnea.f_links[link_idx] = F_child_pulled_back + F_inertial - F_coriolis;
@@ -133,17 +133,17 @@ namespace xarm_geo {
         // Write Columns of M (Wrench F = I_C[i+1] * S_i, transported up the chain)
         data.M.setZero();
         for (int i = 0; i < dof; ++i) {
-            data.crba.F_scratch.coeffs.noalias() = data.crba.I_C[i] * model.screw_axes_local[i];
+            data.crba.F_scratch.noalias() = data.crba.I_C[i] * model.screw_axes_local[i];
 
             // Diagonal Entry
-            data.M(i, i) = data.crba.F_scratch.coeffs.dot(model.screw_axes_local[i]);
+            data.M(i, i) = data.crba.F_scratch.dot(model.screw_axes_local[i]);
 
             // Off-Diagonals: Transport F up the chain, dot w/ each ancestor's screw
             for (int j = i; j >= 1; --j) {
                 const auto Ad_T = data.rnea.T_i_parent_cache[j].Ad().transpose();
-                data.crba.F_scratch.coeffs = Ad_T * data.crba.F_scratch.coeffs;
+                data.crba.F_scratch = Ad_T * data.crba.F_scratch;
 
-                const double m_ij = data.crba.F_scratch.coeffs.dot(model.screw_axes_local[j - 1]);
+                const double m_ij = data.crba.F_scratch.dot(model.screw_axes_local[j - 1]);
                 data.M(i, j - 1) = m_ij;
                 data.M(j - 1, i) = m_ij;
             }

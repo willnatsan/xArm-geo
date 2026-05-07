@@ -42,11 +42,51 @@ namespace xarm_geo::manifold {
             return CoTangent(lhs.coeffs * rhs);
         }
 
-        template <typename MatrixDerived>
-        [[nodiscard]] friend auto operator*(const Eigen::MatrixBase<MatrixDerived> &inertia,
-                                            const typename G::Tangent &accel) -> CoTangent {
-            return CoTangent(inertia * Eigen::Matrix<Scalar, dof, 1>(accel));
+        // Matrix * CoTangent -> CoTangent (e.g., Ad^T * W, J^T * W)
+        template <typename Derived>
+        [[nodiscard]] friend auto operator*(const Eigen::MatrixBase<Derived> &M, const CoTangent &W)
+            -> CoTangent {
+            return CoTangent(M * W.coeffs);
         }
+
+        // Compound Assignment
+
+        auto operator+=(const CoTangent &rhs) -> CoTangent & {
+            coeffs += rhs.coeffs;
+            return *this;
+        }
+
+        auto operator-=(const CoTangent &rhs) -> CoTangent & {
+            coeffs -= rhs.coeffs;
+            return *this;
+        }
+
+        template <typename Derived>
+        auto operator+=(const Eigen::MatrixBase<Derived> &rhs) -> CoTangent & {
+            coeffs += rhs;
+            return *this;
+        }
+
+        template <typename Derived>
+        auto operator-=(const Eigen::MatrixBase<Derived> &rhs) -> CoTangent & {
+            coeffs -= rhs;
+            return *this;
+        }
+
+        // Block Accessors (return Eigen block expressions; usable as lvalues)
+
+        template <int N> auto head() { return coeffs.template head<N>(); }
+        template <int N> auto head() const { return coeffs.template head<N>(); }
+        template <int N> auto tail() { return coeffs.template tail<N>(); }
+        template <int N> auto tail() const { return coeffs.template tail<N>(); }
+
+        auto head(int n) { return coeffs.head(n); }
+        auto head(int n) const { return coeffs.head(n); }
+        auto tail(int n) { return coeffs.tail(n); }
+        auto tail(int n) const { return coeffs.tail(n); }
+
+        // NoAlias Proxy (enables `wrench.noalias() += M * v;` style assignments)
+        auto noalias() { return coeffs.noalias(); }
 
         // Dual Pairing (e.g., Mechanical Power for SE(3): P = W^T * V)
         template <typename TangentType>

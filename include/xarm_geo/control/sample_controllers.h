@@ -26,7 +26,7 @@ namespace xarm_geo {
     //     xi_c = Ad_{g_e} * xi_d - nabla Phi(g_e)         (use_feedforward = true)
     //     xi_c =                 - nabla Phi(g_e)         (use_feedforward = false)
 
-    class GeometricPController final : public KinematicTaskController {
+    class GeometricPController final : public KinematicTaskControllerBase {
     public:
         explicit GeometricPController(const Model &model);
 
@@ -36,13 +36,8 @@ namespace xarm_geo {
         GradientType gradient = GradientType::LieGroup;
 
     protected:
-        auto compute_command_twist(const Model &model, Data &data, const JointState &fb,
-                                   const TaskSpaceTarget &ref, const ControllerContext &ctx,
-                                   manifold::SE3::Twist &cmd_twist) noexcept
-            -> ControllerStatus override;
-
-    private:
-        int dof_;
+        auto compute_command_twist(const Model &model, Data &data, const TaskControllerContext &ctx,
+                                   manifold::SE3::Twist &cmd_twist) noexcept -> bool override;
     };
 
     // --- Geometric PD Controller (Dynamic) ---
@@ -61,7 +56,7 @@ namespace xarm_geo {
     // If the factorisation fails (M not PD), the FF term is dropped for
     // that tick (debug-logged) and the P+D path still runs.
 
-    class GeometricPDController final : public DynamicTaskController {
+    class GeometricPDController final : public DynamicTaskControllerBase {
     public:
         explicit GeometricPDController(const Model &model);
 
@@ -71,16 +66,13 @@ namespace xarm_geo {
         GradientType gradient = GradientType::LieGroup;
 
     protected:
-        auto compute_task_wrench(const Model &model, Data &data, const JointState &fb,
-                                 const TaskSpaceTarget &ref, const ControllerContext &ctx,
-                                 manifold::SE3::Twist &task_wrench) noexcept
-            -> ControllerStatus override;
+        auto compute_command_wrench(const Model &model, Data &data,
+                                    const TaskControllerContext &ctx,
+                                    manifold::SE3::Wrench &cmd_wrench) noexcept -> bool override;
 
     private:
-        int dof_;
-
         // --- Per-Tick Scratch (Pre-Allocated at Construction) ---
-        // Sized from model.dof; zero allocation in compute_task_wrench().
+        // Sized from model.dof; zero allocation in compute_command_wrench().
         Eigen::LLT<Eigen::MatrixXd> M_llt_;
         Eigen::MatrixXd M_inv_Jt_;            // (dof x 6)
         Eigen::Matrix<double, 6, 6> lambda_;  // Operational-space inertia
@@ -102,7 +94,7 @@ namespace xarm_geo {
     // unsafe near theta=pi due to branch-cut accumulation. Caller must invoke
     // reset() to zero the integrator state between distinct trajectories.
 
-    class GeometricPIController final : public KinematicTaskController {
+    class GeometricPIController final : public KinematicTaskControllerBase {
     public:
         explicit GeometricPIController(const Model &model);
 
@@ -117,13 +109,10 @@ namespace xarm_geo {
             Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
 
     protected:
-        auto compute_command_twist(const Model &model, Data &data, const JointState &fb,
-                                   const TaskSpaceTarget &ref, const ControllerContext &ctx,
-                                   manifold::SE3::Twist &cmd_twist) noexcept
-            -> ControllerStatus override;
+        auto compute_command_twist(const Model &model, Data &data, const TaskControllerContext &ctx,
+                                   manifold::SE3::Twist &cmd_twist) noexcept -> bool override;
 
     private:
-        int dof_;
         manifold::SE3::Twist e_I_ = manifold::SE3::Twist::Zero();  // integrator state
     };
 
@@ -141,7 +130,7 @@ namespace xarm_geo {
     // unsafe near theta=pi due to branch-cut accumulation. Caller must invoke
     // reset() to zero the integrator state between distinct trajectories.
 
-    class GeometricPIDController final : public DynamicTaskController {
+    class GeometricPIDController final : public DynamicTaskControllerBase {
     public:
         explicit GeometricPIDController(const Model &model);
 
@@ -157,17 +146,15 @@ namespace xarm_geo {
             Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
 
     protected:
-        auto compute_task_wrench(const Model &model, Data &data, const JointState &fb,
-                                 const TaskSpaceTarget &ref, const ControllerContext &ctx,
-                                 manifold::SE3::Twist &task_wrench) noexcept
-            -> ControllerStatus override;
+        auto compute_command_wrench(const Model &model, Data &data,
+                                    const TaskControllerContext &ctx,
+                                    manifold::SE3::Wrench &cmd_wrench) noexcept -> bool override;
 
     private:
-        int dof_;
         manifold::SE3::Twist e_I_ = manifold::SE3::Twist::Zero();  // integrator state
 
         // --- Per-Tick Scratch (Pre-Allocated at Construction) ---
-        // Sized from model.dof; zero allocation in compute_task_wrench().
+        // Sized from model.dof; zero allocation in compute_command_wrench().
         Eigen::LLT<Eigen::MatrixXd> M_llt_;
         Eigen::MatrixXd M_inv_Jt_;            // (dof x 6)
         Eigen::Matrix<double, 6, 6> lambda_;  // Operational-space inertia
@@ -175,5 +162,12 @@ namespace xarm_geo {
         manifold::SE3::Twist d_ad_xi_d_;      // d/dt(Ad_{g_e} * xi_d)
         manifold::SE3::Twist xi_e_;           // velocity error
     };
+
+    // --- Compile-Time Concept Verifications ---
+
+    static_assert(KinematicTaskController<GeometricPController>);
+    static_assert(KinematicTaskController<GeometricPIController>);
+    static_assert(DynamicTaskController<GeometricPDController>);
+    static_assert(DynamicTaskController<GeometricPIDController>);
 
 }  // namespace xarm_geo

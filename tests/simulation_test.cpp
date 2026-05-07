@@ -153,31 +153,35 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     //
     // Kinematic mode: GeometricPController emits JointVelocity. Defaults
     // (kp_pos = kp_rot = 8) preserve the previously hard-coded behaviour;
-    // K_D unused.
-    //
-    // Dynamic mode: GeometricPDController emits JointTorque. K_D is set to
-    // a critically-damped baseline relative to K_P.
 
     xarm_geo::GeometricPController p_controller(model);
+
     p_controller.gains.kp_pos.setConstant(8.0);
     p_controller.gains.kp_rot.setConstant(8.0);
+
     p_controller.use_feedforward = params.feedforward;
     p_controller.constraint_aware = params.constraint_aware;
     p_controller.ik_options.apply_scaling = true;
     if (params.constraint_aware) { p_controller.attach_collision(col_model, col_data); }
 
+    // Dynamic mode: GeometricPDController emits JointTorque. K_D is set to
+    // a critically-damped baseline relative to K_P.
+
     xarm_geo::GeometricPDController pd_controller(model);
+
     pd_controller.gains.kp_pos.setConstant(100.0);
     pd_controller.gains.kp_rot.setConstant(50.0);
     pd_controller.gains.kd_lin.setConstant(20.0);
     pd_controller.gains.kd_ang.setConstant(10.0);
+
     pd_controller.use_feedforward = params.feedforward;
+    pd_controller.compensate_bias = true;  // model.gravity is non-zero in torque mode
     pd_controller.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { pd_controller.attach_collision(col_model, col_data); }
 
     xarm_geo::JointTorque torque_target(model.dof);
-    xarm_geo::ControllerContext ctx{.dt = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                        std::chrono::duration<double>(physics_dt))};
+    const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(physics_dt));
 
     while (t < duration && sim.is_running()) {
         if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { break; }
@@ -186,7 +190,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
         if (params.torque_mode) {
             // --- Dynamic Mode: GeometricPDController -> JointTorque ---
-            if (pd_controller.update(model, data, state, task_target, ctx, torque_target) !=
+            const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
+            if (pd_controller.update(model, data, ctx, torque_target) !=
                 xarm_geo::ControllerStatus::OK) {
                 std::cerr << "GeometricPDController update failed.\n";
                 break;
@@ -194,7 +199,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
             if (sim.write(torque_target) != xarm_geo::InterfaceStatus::OK) { break; }
         } else if (params.geometric) {
             // --- Kinematic Mode: GeometricPController -> JointVelocity ---
-            if (p_controller.update(model, data, state, task_target, ctx, control_target) !=
+            const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
+            if (p_controller.update(model, data, ctx, control_target) !=
                 xarm_geo::ControllerStatus::OK) {
                 std::cerr << "GeometricPController update failed.\n";
                 break;

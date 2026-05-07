@@ -8,7 +8,9 @@ namespace xarm_geo {
 
     namespace {
 
+        // --- Helper Functions ---
         // Translate a solver status into the corresponding ControllerStatus.
+
         constexpr auto map_solver_status(OptimalIKStatus s) -> ControllerStatus {
             switch (s) {
             case OptimalIKStatus::OK:

@@ -97,6 +97,7 @@ namespace xarm_geo {
         void detach_collision() noexcept;
 
         // --- Public Configuration ---
+
         bool constraint_aware = false;
         IKOptions ik_options;
         OptimalIKOptions optimal_ik_options;
@@ -153,6 +154,7 @@ namespace xarm_geo {
         void detach_collision() noexcept;
 
         // --- Public Configuration ---
+
         bool compensate_bias = false;
         bool refresh_dynamics = false;
         bool constraint_aware = false;

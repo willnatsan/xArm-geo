@@ -126,21 +126,6 @@ namespace xarm_geo {
 
         // Solve for Joint Velocities w/ Cholesky Decomposition (LLT; A is strictly PD)
         data.v_out = data.ik.A.llt().solve(data.ik.b);
-
-        // Joint Velocity Scaling (Ensure Limits are not Breached)
-        if (options.apply_scaling) {
-            double max_scale_factor = 1.0;
-            for (int i = 0; i < model.dof; ++i) {
-                double abs_vel = std::abs(data.v_out(i));
-                double limit = model.limits[i].q_vel_max;
-
-                if (limit > 0.0 && abs_vel > limit) {
-                    double scale = abs_vel / limit;
-                    max_scale_factor = std::max(scale, max_scale_factor);
-                }
-            }
-            if (max_scale_factor > 1.0) { data.v_out /= max_scale_factor; }
-        }
     };
 
     auto inverse_kinematics(const Model &model, Data &data,
@@ -193,64 +178,5 @@ namespace xarm_geo {
         // If Loop Terminates without returning `true`, IK Failed to Converge
         return false;
     };
-
-    auto inverse_kinematics(const Model &model, Data &data, const CollisionModel &col_model,
-                            CollisionData &col_data,
-                            const Eigen::Ref<const Eigen::VectorXd> &q_init,
-                            const manifold::SE3 &target_pose, const IKOptions &options) -> bool {
-
-        assert(q_init.size() == model.dof && "q_init size must equal model.dof");
-        assert(options.dt > 0.0 && "IKOptions::dt must be positive");
-
-        // Post-hoc collision check only (iterates may pass through collisions).
-        // For true avoidance, use optimal_inverse_kinematics.
-
-        // Initialise the Current Guess from the Initial Starting Configuration
-        data.q_guess = q_init;
-
-        for (int attempt = 0; attempt < options.max_restarts; ++attempt) {
-            data.q_out = data.q_guess;
-
-            for (int iter = 0; iter < options.max_iters; ++iter) {
-                // Sync data.q to current iterate, then update kinematic tree.
-                data.q = data.q_out;
-                compute_jacobians(model, data);
-
-                // Compute Body-Frame Error Using Right-Minus: log(ee^{-1} * target)
-                manifold::SE3::Twist V_err = target_pose - data.ee_pose;
-
-                // If Converged -> Check for Collisions; Return if Free, Else Restart
-                if (V_err.norm() < options.tolerance) {
-                    update_geometry_poses(model, data, col_model, col_data);
-                    if (!compute_collisions(col_model, col_data)) { return true; }
-                    break;  // Converged but Colliding -> Skip to Next Restart
-                }
-
-                // If Not Converged -> Compute Joint Step & Apply
-                // (data.v_out is rad/s; integrate over options.dt to get a Δq step)
-                inverse_diff_kinematics(model, data, V_err, options);
-                data.q_out += data.v_out * options.dt;
-
-                for (int i = 0; i < model.dof; ++i) {
-                    // Wrap Joint Angle to [midpoint - pi, midpoint + pi]
-                    double midpoint = 0.5 * (model.limits[i].q_min + model.limits[i].q_max);
-                    data.q_out[i] = manifold::wrap_to_range(data.q_out[i], midpoint);
-
-                    // Clamp Joint to Specified Joint Limits
-                    data.q_out[i] =
-                        std::clamp(data.q_out[i], model.limits[i].q_min, model.limits[i].q_max);
-                }
-            }
-
-            // IK Loop Finished without returning `true` -> Go to Next Attempt w/ Per-Joint Seed
-            for (int i = 0; i < model.dof; ++i) {
-                std::uniform_real_distribution<> dis(model.limits[i].q_min, model.limits[i].q_max);
-                data.q_guess[i] = dis(data.rng);
-            }
-        }
-
-        // If Loop Terminates without returning `true`, IK Failed to Converge
-        return false;
-    }
 
 }  // namespace xarm_geo

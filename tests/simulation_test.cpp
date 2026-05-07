@@ -21,8 +21,8 @@ struct TestParams {
     bool check_trajectory = false;
     bool torque_mode = false;  // false: kinematic P + JointVelocity; true: dynamic PD + JointTorque
     bool feedforward = true;   // controller FF toggle
-    bool constraint_aware = false;  // route through optimal_inverse_diff_kinematics (kinematic) /
-                                    // asif_filter (dynamic)
+    bool constraint_aware = true;  // route through optimal_inverse_diff_kinematics (kinematic) /
+                                   // asif_filter (dynamic)
 };
 
 auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::JointPTP &traj,
@@ -85,8 +85,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     // --- Layer 1: Collision-Aware IK for Start Pose ---
 
-    bool ik_success =
-        xarm_geo::inverse_kinematics(model, data, col_model, col_data, q_home, task_target.pose);
+    bool ik_success = xarm_geo::optimal_inverse_kinematics(model, data, col_model, col_data, q_home,
+                                                           task_target.pose);
     if (!ik_success) {
         std::cerr << "IK FAILED for Trajectory Start Pose (No Collision-Free Solution)\n";
         return 1;
@@ -155,13 +155,10 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     // (kp_pos = kp_rot = 8) preserve the previously hard-coded behaviour;
 
     xarm_geo::GeometricPController p_controller(model);
-
     p_controller.gains.kp_pos.setConstant(8.0);
     p_controller.gains.kp_rot.setConstant(8.0);
-
     p_controller.use_feedforward = params.feedforward;
     p_controller.constraint_aware = params.constraint_aware;
-    p_controller.ik_options.apply_scaling = true;
     if (params.constraint_aware) { p_controller.attach_collision(col_model, col_data); }
 
     // Dynamic mode: GeometricPDController emits JointTorque. K_D is set to
@@ -275,7 +272,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
             xarm_geo::manifold::SE3 pose_err = data.ee_pose.inverse() * task_target.pose;
             cmd_twist += pose_err.Ad() * task_target.twist;
 
-            xarm_geo::IKOptions options({.apply_scaling = true});
+            xarm_geo::IKOptions options;
             xarm_geo::inverse_diff_kinematics(model, data, cmd_twist, options);
 
             control_target.v = data.v_out;

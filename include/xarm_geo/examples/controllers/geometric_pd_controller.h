@@ -11,7 +11,7 @@
 #include <xarm_geo/modelling/dynamics.h>
 #include <xarm_geo/utils/debug.h>
 
-namespace xarm_geo {
+namespace xarm_geo::controllers {
 
     // --- Example: Geometric PD Controller (Dynamic, Task-Space) ---
     //
@@ -111,6 +111,6 @@ namespace xarm_geo {
     };
 
     // --- Compile-Time Concept Verification ---
-    static_assert(DynamicTaskController<GeometricPDController>);
+    static_assert(xarm_geo::DynamicTaskController<GeometricPDController>);
 
-}  // namespace xarm_geo
+}  // namespace xarm_geo::controllers

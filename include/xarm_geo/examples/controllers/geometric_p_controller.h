@@ -9,7 +9,7 @@
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/system.h>
 
-namespace xarm_geo {
+namespace xarm_geo::controllers {
 
     // --- Example: Geometric P Controller (Kinematic, Task-Space) ---
     //
@@ -68,6 +68,6 @@ namespace xarm_geo {
     };
 
     // --- Compile-Time Concept Verification ---
-    static_assert(KinematicTaskController<GeometricPController>);
+    static_assert(xarm_geo::KinematicTaskController<GeometricPController>);
 
-}  // namespace xarm_geo
+}  // namespace xarm_geo::controllers

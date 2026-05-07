@@ -16,7 +16,7 @@
 #include <xarm_geo/safety/tasks.h>
 #include <xarm_geo/utils/debug.h>
 
-namespace xarm_geo {
+namespace xarm_geo::controllers {
 
     // --- Example: Posture-Biased Geometric P Controller (Concept-Only) ---
     //
@@ -158,6 +158,6 @@ namespace xarm_geo {
     };
 
     // --- Compile-Time Concept Verification ---
-    static_assert(KinematicTaskController<PostureBiasedPController>);
+    static_assert(xarm_geo::KinematicTaskController<PostureBiasedPController>);
 
-}  // namespace xarm_geo
+}  // namespace xarm_geo::controllers

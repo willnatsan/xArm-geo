@@ -5,8 +5,9 @@
 #include <stdexcept>
 #include <thread>
 
-#include <xarm_geo/control/sample_controllers.h>
 #include <xarm_geo/core/system.h>
+#include <xarm_geo/examples/controllers/geometric_p_controller.h>
+#include <xarm_geo/examples/controllers/geometric_pd_controller.h>
 #include <xarm_geo/interfaces/simulation.h>
 #include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/kinematics.h>

@@ -43,6 +43,35 @@
 // them, and may itself call compute_mass_matrix / compute_bias_forces /
 // compute_jacobians as needed.
 
+// --- Customising the constraint / safety set ---
+//
+// The base classes wrap the *convenience* overloads of:
+//   - optimal_inverse_diff_kinematics  (kinematic-task base)
+//   - asif_filter                      (dynamic-task & dynamic-joint bases)
+//
+// Those overloads install an opinionated default safety set:
+//
+//   Optimal IDK : TwistTask + VelocityLimit + PositionLimit +
+//                 CollisionBarrier (activation 0.05 m, alpha 5.0).
+//   ASIF        : DynPositionBarrier + DynVelocityBarrier +
+//                 DynCollisionBarrier (alpha_0 25, alpha_1 10,
+//                 activation 0.05 m). Torque box auto-filled from
+//                 model.limits[i].tau_max.
+//
+// To install custom tasks / constraints / kinematic barriers / dynamic
+// barriers (or to use a different filtering strategy entirely), DO NOT
+// subclass the base. Instead, write your own class that satisfies the
+// relevant *Controller concept (defined at the bottom of this file).
+//
+// Worked Example:
+//   - xarm_geo/examples/controllers/custom_controller.h   (PostureBiasedPController:
+//                                                          kinematic-task with an
+//                                                          augmented Optimal IDK
+//                                                          task set)
+//
+// TODO (future): consider adding a protected virtual hook to customise the default
+// Optimal IDK and ASIF implementations.
+
 namespace xarm_geo {
 
     // --- Controller Metadata ---
@@ -56,6 +85,40 @@ namespace xarm_geo {
         MAX_ITERS,       // optimal-IDK or ASIF reported MAX_ITERS
         SOLVER_ERROR,    // optimal-IDK or ASIF reported ERROR
     };
+
+    // --- Solver Status Mapping (Helper Functions) ---
+    //
+    // Translate an upstream solver status (OptimalIKStatus, ASIFStatus) into
+    // the corresponding ControllerStatus.
+
+    [[nodiscard]] constexpr auto to_controller_status(OptimalIKStatus s) noexcept
+        -> ControllerStatus {
+        switch (s) {
+        case OptimalIKStatus::OK:
+            return ControllerStatus::OK;
+        case OptimalIKStatus::INFEASIBLE:
+            return ControllerStatus::INFEASIBLE;
+        case OptimalIKStatus::MAX_ITERS:
+            return ControllerStatus::MAX_ITERS;
+        case OptimalIKStatus::ERROR:
+            return ControllerStatus::SOLVER_ERROR;
+        }
+        return ControllerStatus::SOLVER_ERROR;
+    }
+
+    [[nodiscard]] constexpr auto to_controller_status(ASIFStatus s) noexcept -> ControllerStatus {
+        switch (s) {
+        case ASIFStatus::OK:
+            return ControllerStatus::OK;
+        case ASIFStatus::INFEASIBLE:
+            return ControllerStatus::INFEASIBLE;
+        case ASIFStatus::MAX_ITERS:
+            return ControllerStatus::MAX_ITERS;
+        case ASIFStatus::ERROR:
+            return ControllerStatus::SOLVER_ERROR;
+        }
+        return ControllerStatus::SOLVER_ERROR;
+    }
 
     struct TaskControllerContext {
         const JointState &fb;

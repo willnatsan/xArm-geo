@@ -6,41 +6,6 @@
 
 namespace xarm_geo {
 
-    namespace {
-
-        // --- Helper Functions ---
-        // Translate a solver status into the corresponding ControllerStatus.
-
-        constexpr auto map_solver_status(OptimalIKStatus s) -> ControllerStatus {
-            switch (s) {
-            case OptimalIKStatus::OK:
-                return ControllerStatus::OK;
-            case OptimalIKStatus::INFEASIBLE:
-                return ControllerStatus::INFEASIBLE;
-            case OptimalIKStatus::MAX_ITERS:
-                return ControllerStatus::MAX_ITERS;
-            case OptimalIKStatus::ERROR:
-                return ControllerStatus::SOLVER_ERROR;
-            }
-            return ControllerStatus::SOLVER_ERROR;
-        }
-
-        constexpr auto map_solver_status(ASIFStatus s) -> ControllerStatus {
-            switch (s) {
-            case ASIFStatus::OK:
-                return ControllerStatus::OK;
-            case ASIFStatus::INFEASIBLE:
-                return ControllerStatus::INFEASIBLE;
-            case ASIFStatus::MAX_ITERS:
-                return ControllerStatus::MAX_ITERS;
-            case ASIFStatus::ERROR:
-                return ControllerStatus::SOLVER_ERROR;
-            }
-            return ControllerStatus::SOLVER_ERROR;
-        }
-
-    }  // namespace
-
     // --- KinematicTaskControllerBase ---
 
     KinematicTaskControllerBase::KinematicTaskControllerBase(const Model & /*model*/) noexcept {
@@ -90,7 +55,7 @@ namespace xarm_geo {
 
             if (status != OptimalIKStatus::OK) {
                 debug::log("optimal_inverse_diff_kinematics failed");
-                return map_solver_status(status);
+                return to_controller_status(status);
             }
         } else {
             inverse_diff_kinematics(model, data, cmd_twist, ik_options);
@@ -174,7 +139,7 @@ namespace xarm_geo {
 
             if (status != ASIFStatus::OK) {
                 debug::log("asif_filter failed");
-                return map_solver_status(status);
+                return to_controller_status(status);
             }
 
             out.tau = tau_safe_;
@@ -289,7 +254,7 @@ namespace xarm_geo {
 
             if (status != ASIFStatus::OK) {
                 debug::log("asif_filter failed");
-                return map_solver_status(status);
+                return to_controller_status(status);
             }
 
             out.tau = tau_safe_;

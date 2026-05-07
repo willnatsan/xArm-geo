@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <Eigen/Dense>
 
 #include <xarm_geo/core/manifold.h>
@@ -20,6 +22,18 @@ namespace xarm_geo {
         Eigen::Vector3d ki_lin = Eigen::Vector3d::Zero();  // K_I linear (PI/PID only)
         Eigen::Vector3d ki_ang = Eigen::Vector3d::Zero();  // K_I angular (PI/PID only)
     };
+
+    // --- SE(3) Tracking Gradient Selector ---
+    //
+    // Selects which gradient flavour a geometric controller uses. The two
+    // helpers below (`se3_lie_group_gradient`, `se3_lie_algebra_gradient`)
+    // implement the corresponding maps; this enum is the convenience tag a
+    // controller exposes to switch between them.
+    //
+    //   LieGroup   : Smooth function (via trace function) -> Almost Global Stability
+    //   LieAlgebra : Discontinuous function (via log-map) -> Global Stability
+
+    enum class GradientType : std::uint8_t { LieGroup, LieAlgebra };
 
     // --- SE(3) Tracking: Free-Function Building Blocks ---
     //

@@ -132,7 +132,6 @@ set(LIB_SOURCES
         src/safety/tasks.cpp
         src/control/admittance.cpp
         src/control/controller.cpp
-        src/control/sample_controllers.cpp
         src/control/tracking.cpp
         src/trajectory/sample_trajectories.cpp
         src/utils/model_builder.cpp

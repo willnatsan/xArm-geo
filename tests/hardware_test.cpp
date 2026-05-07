@@ -8,8 +8,8 @@
 #include <coal/shape/geometric_shapes.h>
 
 #include <xarm_geo/control/controller.h>
-#include <xarm_geo/control/sample_controllers.h>
 #include <xarm_geo/core/system.h>
+#include <xarm_geo/examples/controllers/geometric_p_controller.h>
 #include <xarm_geo/interfaces/hardware.h>
 #include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/optimal_kinematics.h>

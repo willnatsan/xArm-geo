@@ -102,7 +102,7 @@ namespace xarm_geo {
     // in the dynamic PD law). `ad_xi_d` is the cached value of Ad_{g_e} *
     // xi_d (avoids recomputing). `spatial_acc_body` is the reference
     // body-frame spatial acceleration (= d/dt(xi_d), as written by every
-    // TaskSpaceTrajectory in src/trajectory/sample_trajectories.cpp via
+    // TaskSpaceTrajectory in xarm_geo/examples/trajectories/*.h via
     // smooth's BSpline analytical derivative).
     [[nodiscard]] auto
     se3_transported_acc(const manifold::SE3 &g_e, const manifold::SE3::Twist &xi_e,

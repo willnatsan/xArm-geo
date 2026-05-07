@@ -10,10 +10,11 @@
 #include <xarm_geo/control/controller.h>
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
+#include <xarm_geo/examples/trajectories/joint_ptp.h>
+#include <xarm_geo/examples/trajectories/tilting_circle.h>
 #include <xarm_geo/interfaces/hardware.h>
 #include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/optimal_kinematics.h>
-#include <xarm_geo/trajectory/sample_trajectories.h>
 #include <xarm_geo/trajectory/trajectory.h>
 #include <xarm_geo/utils/model_builder.h>
 
@@ -103,8 +104,9 @@ namespace {
     // Task-space execution loop. Drives a GeometricPController against the TaskSpaceTrajectory.
     template <xarm_geo::TaskSpaceTrajectory T>
     auto run_task_space_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
-                           xarm_geo::Data &data, xarm_geo::GeometricPController &controller,
-                           const T &traj, double duration, xarm_geo::JointState &state,
+                           xarm_geo::Data &data,
+                           xarm_geo::controllers::GeometricPController &controller, const T &traj,
+                           double duration, xarm_geo::JointState &state,
                            xarm_geo::JointVelocity &control_target) -> bool {
 
         const double dt = 0.002;
@@ -203,7 +205,7 @@ int main(int argc, char *argv[]) {
         joint_controller.kp = 5.0;
 
         // Task-space geometric P controller
-        xarm_geo::GeometricPController p_controller(model);
+        xarm_geo::controllers::GeometricPController p_controller(model);
         p_controller.gains.kp_pos.setConstant(8.0);
         p_controller.gains.kp_rot.setConstant(8.0);
         p_controller.use_feedforward = true;

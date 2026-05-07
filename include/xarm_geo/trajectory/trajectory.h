@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <concepts>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <Eigen/Dense>
 
@@ -43,6 +45,39 @@ namespace xarm_geo {
     concept JointSpaceTrajectory = requires(const T &traj, double t, JointSpaceTarget &target) {
         { traj.evaluate(t, target) } -> std::same_as<TrajectoryStatus>;
     };
+
+    // --- B-Spline Construction Helper ---
+    //
+    // Build a degree-D SE(3) B-spline from a sequence of waypoints, padding
+    // the boundaries with `D` repeated copies of the first / last waypoint
+    // to satisfy the knot multiplicity required for degree-D continuity at
+    // the endpoints.
+    //
+    // `waypoints` is sampled at uniform intervals over [0, duration]. The
+    // resulting spline is parameterised on [0, duration]; each segment
+    // spans dt = duration / (waypoints.size() - 1).
+    //
+    // Useful for building TaskSpaceTrajectory implementations that sample
+    // an analytic curve at regular intervals and want a C^{D-1} smooth path
+    // with well-behaved boundary derivatives.
+
+    template <std::size_t D = 5>
+    [[nodiscard]] inline auto build_se3_spline(const std::vector<manifold::SE3> &waypoints,
+                                               double duration) -> manifold::SE3::Spline<D> {
+
+        if (waypoints.size() < 2) {
+            throw std::invalid_argument("build_se3_spline: at least 2 waypoints required");
+        }
+
+        std::vector<manifold::SE3> padded;
+        padded.reserve(waypoints.size() + 2 * D);
+        for (std::size_t i = 0; i < D; ++i) { padded.push_back(waypoints.front()); }
+        for (const auto &wp : waypoints) { padded.push_back(wp); }
+        for (std::size_t i = 0; i < D; ++i) { padded.push_back(waypoints.back()); }
+
+        const double dt = duration / static_cast<double>(waypoints.size() - 1);
+        return manifold::SE3::Spline<D>(0.0, dt, padded);
+    }
 
     // --- Trajectory Validation (Collision Detection) ---
 

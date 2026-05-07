@@ -8,10 +8,15 @@
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
 #include <xarm_geo/examples/controllers/geometric_pd_controller.h>
+#include <xarm_geo/examples/trajectories/figure_eight.h>
+#include <xarm_geo/examples/trajectories/inner_cavity_scan.h>
+#include <xarm_geo/examples/trajectories/joint_ptp.h>
+#include <xarm_geo/examples/trajectories/pipe_inspection.h>
+#include <xarm_geo/examples/trajectories/tilting_circle.h>
+#include <xarm_geo/examples/trajectories/wing_inspection.h>
 #include <xarm_geo/interfaces/simulation.h>
 #include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/kinematics.h>
-#include <xarm_geo/trajectory/sample_trajectories.h>
 #include <xarm_geo/utils/model_builder.h>
 
 struct TestParams {
@@ -155,7 +160,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     // Kinematic mode: GeometricPController emits JointVelocity. Defaults
     // (kp_pos = kp_rot = 8) preserve the previously hard-coded behaviour;
 
-    xarm_geo::GeometricPController p_controller(model);
+    xarm_geo::controllers::GeometricPController p_controller(model);
     p_controller.gains.kp_pos.setConstant(8.0);
     p_controller.gains.kp_rot.setConstant(8.0);
     p_controller.use_feedforward = params.feedforward;
@@ -165,7 +170,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     // Dynamic mode: GeometricPDController emits JointTorque. K_D is set to
     // a critically-damped baseline relative to K_P.
 
-    xarm_geo::GeometricPDController pd_controller(model);
+    xarm_geo::controllers::GeometricPDController pd_controller(model);
 
     pd_controller.gains.kp_pos.setConstant(100.0);
     pd_controller.gains.kp_rot.setConstant(50.0);

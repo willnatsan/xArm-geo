@@ -49,11 +49,12 @@ namespace xarm_geo {
     // joint velocity -- e.g. Bullo & Murray's geometric PD ( C(q, q_dot) *
     // r_dot ) or Slotine--Li's regressor ( C(q, q_dot) * r_dot_filtered ).
     //
-    // Note: this function calls compute_gravity_forces internally and so
-    // overwrites data.g, data.tau_out, and data.rnea workspaces.
+    // Note: this function calls compute_gravity_forces internally (unless
+    // g_fresh = true) and so overwrites data.g, data.tau_out, and data.rnea
+    // workspaces.
     void compute_coriolis_times(const Model &model, Data &data,
                                 const Eigen::Ref<const Eigen::VectorXd> &v_a,
                                 const Eigen::Ref<const Eigen::VectorXd> &v_b,
-                                Eigen::Ref<Eigen::VectorXd> out);
+                                Eigen::Ref<Eigen::VectorXd> out, bool g_fresh = false);
 
 }  // namespace xarm_geo

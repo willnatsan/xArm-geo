@@ -180,7 +180,7 @@ namespace xarm_geo {
     void compute_coriolis_times(const Model &model, Data &data,
                                 const Eigen::Ref<const Eigen::VectorXd> &v_a,
                                 const Eigen::Ref<const Eigen::VectorXd> &v_b,
-                                Eigen::Ref<Eigen::VectorXd> out) {
+                                Eigen::Ref<Eigen::VectorXd> out, bool g_fresh) {
 
         assert(v_a.size() == model.dof && "v_a size must equal model.dof");
         assert(v_b.size() == model.dof && "v_b size must equal model.dof");
@@ -208,8 +208,10 @@ namespace xarm_geo {
         inverse_dynamics(model, data, data.coriolis.v_sum, data.bias.a_zero);
         data.coriolis.b_sum = data.tau_out;
 
-        // 4) g(q) -> data.g  (also overwrites data.tau_out)
-        compute_gravity_forces(model, data);
+        // 4) g(q) -> data.g
+        // Skip the recompute if the caller has already populated data.g at
+        // the current data.q (drops 4 RNEA -> 3 RNEA per call).
+        if (!g_fresh) { compute_gravity_forces(model, data); }
 
         // Combine: out = 0.5 * (b_sum - b_a - b_b + g)
         out.noalias() =

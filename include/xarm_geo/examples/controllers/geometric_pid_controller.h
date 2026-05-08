@@ -1,8 +1,6 @@
 #pragma once
 
 #include <cassert>
-#include <chrono>
-#include <limits>
 
 #include <Eigen/Dense>
 
@@ -15,7 +13,7 @@
 
 namespace xarm_geo::controllers {
 
-    // --- Example: Geometric PID Controller (Dynamic, Task-Space) ---
+    // --- Example: Geometric PID Controller (Dynamic, Task-Space, Maithripala) ---
     //
     // Reference implementation of an SE(3)-tracking dynamic PID controller
     // built on `DynamicTaskControllerBase`. Mixed-state integral (Goodarzi
@@ -33,11 +31,17 @@ namespace xarm_geo::controllers {
 
     class GeometricPIDController final : public DynamicTaskControllerBase {
     public:
+        // The bias_compensation policy that pairs correctly with this controller's geometric
+        // structure. Set on bias_compensation in the constructor; users may override after
+        // construction to deviate (e.g. set None for real-hardware xArm SDK with gravity comp).
+        static constexpr BiasCompensation kRecommendedBiasCompensation = BiasCompensation::Full;
+
         explicit GeometricPIDController(const Model &model)
             : DynamicTaskControllerBase(model), M_inv_Jt_(Eigen::MatrixXd::Zero(model.dof, 6)) {
 
             assert(model.dof > 0 && "GeometricPIDController: model.dof must be > 0");
             lambda_.setZero();
+            bias_compensation = kRecommendedBiasCompensation;
         }
 
         void reset() noexcept { e_I_.setZero(); }

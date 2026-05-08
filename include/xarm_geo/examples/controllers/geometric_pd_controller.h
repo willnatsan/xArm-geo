@@ -13,12 +13,10 @@
 
 namespace xarm_geo::controllers {
 
-    // --- Example: Geometric PD Controller (Dynamic, Task-Space) ---
+    // --- Example: Geometric PD Controller (Dynamic, Task-Space, Maithripala) ---
     //
     // Reference implementation of an SE(3)-tracking dynamic PD controller
-    // built on `DynamicTaskControllerBase`. Overrides compute_command_wrench
-    // and lets the base handle size checks, kinematics refresh, J^T
-    // projection, optional bias compensation, and optional ASIF filtering.
+    // built on `DynamicTaskControllerBase`.
     //
     // Body-frame end-effector wrench:
     //
@@ -27,29 +25,24 @@ namespace xarm_geo::controllers {
     //              + ( Lambda(q) * d/dt(Ad * xi_d)
     //                  - ad_{xi_e}^* * Lambda(q) * Ad * xi_d )    [if use_feedforward]
     //
-    // Operational-space inertia: Lambda(q) = (J_b * M^{-1} * J_b^T)^{-1}.
-    // M(q) is factorised internally each tick when use_feedforward = true.
-    // If the factorisation fails (M not PD), the FF term is dropped for that
-    // tick (debug-logged) and the P+D path still runs.
-    //
-    // TODO(geometric-fidelity): the operational-space inertial feedforward
-    // term -ad_{xi_e}^* * Lambda * (Ad * xi_d) uses xi_e (body twist error,
-    // built from the ACTUAL body twist xi). This is the SE(3) analogue of
-    // Computed-Torque Control on the operational-space inertia. A fully
-    // faithful Bullo & Murray task-space PD would replace this with a term
-    // derived from the covariant derivative on SE(3) under the Lambda
-    // metric, which would evaluate the Coriolis-like coupling at the
-    // REFERENCE twist Ad * xi_d. Tracked separately; see joint_pd_controller.h
-    // for the joint-space analogue, which is geometrically faithful via
-    // compute_coriolis_times.
+    // The dual-adjoint coupling is intentionally evaluated at the velocity error xi_e
+    // (NOT the actual body twist xi): with this structure the FF residual vanishes at
+    // perfect tracking (xi_e = 0) and the closed-loop system is passive.
+    // See Maithripala et al. (2006) for the derivation.
 
     class GeometricPDController final : public DynamicTaskControllerBase {
     public:
+        // The bias_compensation policy that pairs correctly with this controller's geometric
+        // structure. Set on bias_compensation in the constructor; users may override after
+        // construction to deviate (e.g. set None for real-hardware xArm SDK with gravity comp).
+        static constexpr BiasCompensation kRecommendedBiasCompensation = BiasCompensation::Full;
+
         explicit GeometricPDController(const Model &model)
             : DynamicTaskControllerBase(model), M_inv_Jt_(Eigen::MatrixXd::Zero(model.dof, 6)) {
 
             assert(model.dof > 0 && "GeometricPDController: model.dof must be > 0");
             lambda_.setZero();
+            bias_compensation = kRecommendedBiasCompensation;
         }
 
         // --- Public Configuration ---

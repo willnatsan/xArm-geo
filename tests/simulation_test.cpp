@@ -191,10 +191,6 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     pd_controller.gains.kd_ang.setConstant(10.0);
 
     pd_controller.use_feedforward = params.feedforward;
-    // model.gravity is non-zero in torque mode; the existing GeometricPDController
-    // emits a Computed-Torque-style operational-space FF, so the base must inject
-    // the full bias forces (Coriolis + gravity) to cancel the actual nonlinear dynamics.
-    pd_controller.bias_compensation = xarm_geo::BiasCompensation::Full;
     pd_controller.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { pd_controller.attach_collision(col_model, col_data); }
 

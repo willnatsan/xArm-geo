@@ -13,7 +13,7 @@
 
 namespace xarm_geo::controllers {
 
-    // --- Example: Joint-Space PD Controller (Dynamic, Strict Bullo & Murray) ---
+    // --- Example: Joint-Space PD Controller (Dynamic, Bullo & Murray) ---
     //
     // Reference implementation of a joint-space tracking dynamic PD
     // controller built on `DynamicJointControllerBase`. Faithfully recreates
@@ -40,31 +40,33 @@ namespace xarm_geo::controllers {
     //     The (false, true) combination is unusual but permitted (e.g.
     //     ablation studies isolating the Coriolis contribution).
     //
-    //   - bias_compensation = BiasCompensation::GravityOnly: the base adds
-    //     g(q) after the hook, completing the law with the gravity term.
-    //     Final torque: -K_p e - K_d e_d + M r_ddot + C(q,q_dot) r_dot + g(q).
+    //   - bias_compensation = BiasCompensation::GravityOnly (constructor
+    //     default, see kRecommendedBiasCompensation): the base adds g(q)
+    //     after the hook, completing the law with the gravity term. Final
+    //     torque: -K_p e - K_d e_d + M r_ddot + C(q,q_dot) r_dot + g(q).
     //
-    //   - Real xArm hardware (SDK pre-compensates gravity): set
-    //     bias_compensation = BiasCompensation::None and model.gravity = 0;
-    //     no g(q) term is needed or added.
-    //
-    //   - Computed Torque Control is a different controller; if that is
-    //     what you want, prefer setting bias_compensation = Full and
-    //     dropping the C(q,q_dot) * r_dot term from the FF (i.e. set
-    //     use_coriolis_ff = false). See JointPDController vs. classical CTC
-    //     in the literature for context.
+    //   - Note: For real xArm hardware (SDK pre-compensates gravity): override
+    //     the default by setting bias_compensation = BiasCompensation::None
+    //     after construction, and leave model.gravity = 0.
     //
     //   - Safety: attach_collision(...) and constraint_aware = true to
     //     route the resulting torque through ASIF.
 
     class JointPDController final : public DynamicJointControllerBase {
     public:
+        // The bias_compensation policy that pairs correctly with this controller's geometric
+        // structure. Set on bias_compensation in the constructor; users may override after
+        // construction to deviate (e.g. set None for real-hardware xArm SDK with gravity comp).
+        static constexpr BiasCompensation kRecommendedBiasCompensation =
+            BiasCompensation::GravityOnly;
+
         explicit JointPDController(const Model &model)
             : DynamicJointControllerBase(model), kp(Eigen::VectorXd::Zero(model.dof)),
               kd(Eigen::VectorXd::Zero(model.dof)), Mqdd_r_(Eigen::VectorXd::Zero(model.dof)),
               C_qdot_rdot_(Eigen::VectorXd::Zero(model.dof)) {
 
             assert(model.dof > 0 && "JointPDController: model.dof must be > 0");
+            bias_compensation = kRecommendedBiasCompensation;
         }
 
         // --- Public Configuration ---
@@ -100,7 +102,10 @@ namespace xarm_geo::controllers {
             // Geometric Coriolis feedforward: tau_FF += C(q, q_dot) * r_dot,
             // via the symmetric Levi-Civita Christoffel form.
             if (use_coriolis_ff) {
-                compute_coriolis_times(model, data, ctx.fb.v, ctx.ref.v, C_qdot_rdot_);
+                const bool g_already_fresh =
+                    refresh_dynamics && bias_compensation == BiasCompensation::GravityOnly;
+                compute_coriolis_times(model, data, ctx.fb.v, ctx.ref.v, C_qdot_rdot_,
+                                       g_already_fresh);
                 tau_ctrl.tau.noalias() += C_qdot_rdot_;
             }
 

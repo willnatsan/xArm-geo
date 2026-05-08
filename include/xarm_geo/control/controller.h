@@ -74,6 +74,24 @@
 
 namespace xarm_geo {
 
+    // --- Bias-Force Cancellation Policy (Dynamic Controllers Only) ---
+    //
+    //   None         : out = tau_ctrl
+    //                  (e.g. explicit feedback linearisation, IDA-PBC).
+    //
+    //   GravityOnly  : out = tau_ctrl + g(q)
+    //                  Base injects gravity only; Coriolis is left to the natural dynamics.
+    //                  (Bullo & Murray geometric PD, Slotine--Li adaptive, natural-PD, etc.).
+    //
+    //   Full         : out = tau_ctrl + h(q, q_dot)  with  h = C(q,q_dot)*q_dot + g(q)
+    //                  Base injects the full bias forces.
+    //                  ()Computed Torque Control / inverse-dynamics linearisation)
+    //
+    // Cost: GravityOnly and Full each incur exactly one RNEA pass before the
+    // hook (or share one with refresh_dynamics if enabled). None is free.
+
+    enum class BiasCompensation : std::uint8_t { None, GravityOnly, Full };
+
     // --- Controller Metadata ---
 
     enum class ControllerStatus : std::uint8_t {
@@ -86,7 +104,7 @@ namespace xarm_geo {
         SOLVER_ERROR,    // optimal-IDK or ASIF reported ERROR
     };
 
-    // --- Solver Status Mapping (Helper Functions) ---
+    // --- Solver Status Mapping (Helper Functions)
     //
     // Translate an upstream solver status (OptimalIKStatus, ASIFStatus) into
     // the corresponding ControllerStatus.
@@ -184,22 +202,24 @@ namespace xarm_geo {
     //
     // Refresh policy:
     //   - kinematics : always (compute_jacobians is unconditional).
-    //   - dynamics   : gated by refresh_dynamics (default false).
+    //   - dynamics   : gated by refresh_dynamics (default false). When
+    //                  enabled, the base populates data.M and data.h up
+    //                  front; data.g is populated up front iff the user's
+    //                  bias_compensation policy is GravityOnly.
     //
     // Public config:
-    //   - refresh_dynamics (default false): see above.
-    //   - compensate_bias  (default false): base adds h(q,v) to the projected
-    //                      joint torque. Enable if the user's wrench does
-    //                      NOT already account for gravity/Coriolis (i.e.
-    //                      most torque-mode controllers running on a robot
-    //                      with non-zero model.gravity).
-    //   - constraint_aware (default false): apply ASIF to the resulting
-    //                      torque; requires attach_collision.
+    //   - refresh_dynamics   (default false): see above.
+    //   - bias_compensation  (default None): see `BiasCompensation` enum for semantics.
+    //   - constraint_aware   (default false): apply ASIF to the resulting torque;
+    //                                         requires attach_collision.
     //   - asif_options.
     //
     // Pipeline (after hook):
     //   tau_ctrl = J_b^T * cmd_wrench
-    //   tau_des  = tau_ctrl + (compensate_bias ? data.h : 0)
+    //   switch (bias_compensation):
+    //     None        -> tau_des = tau_ctrl
+    //     GravityOnly -> tau_des = tau_ctrl + data.g
+    //     Full        -> tau_des = tau_ctrl + data.h
     //   out.tau  = constraint_aware ? asif_filter(tau_des) : tau_des
     //
     // Note: derived classes should NOT redefine update(); override only the
@@ -218,14 +238,16 @@ namespace xarm_geo {
 
         // --- Public Configuration ---
 
-        bool compensate_bias = false;
+        BiasCompensation bias_compensation = BiasCompensation::None;
         bool refresh_dynamics = false;
         bool constraint_aware = false;
         ASIFOptions asif_options;
 
     protected:
         // Hook contract: see refresh policy above. data.body_jacobian is
-        // always fresh; data.M / data.h are fresh iff refresh_dynamics.
+        // always fresh; data.M is fresh iff refresh_dynamics; data.h is
+        // fresh iff refresh_dynamics OR bias_compensation == Full; data.g
+        // is fresh iff refresh_dynamics OR bias_compensation == GravityOnly.
         virtual auto compute_command_wrench(const Model &model, Data &data,
                                             const TaskControllerContext &ctx,
                                             manifold::SE3::Wrench &cmd_wrench) noexcept -> bool = 0;
@@ -235,9 +257,8 @@ namespace xarm_geo {
 
         // Pre-allocated joint-sized scratch (sized in the constructor).
         // tau_ctrl_ : J_b^T * cmd_wrench (control torque from the hook, projected to joint space).
-        // tau_des_  : tau_ctrl_ + (compensate_bias ? data.h : 0).
-        // tau_safe_ : ASIF-certified torque (only used when
-        //                   constraint_aware).
+        // tau_des_  : tau_ctrl_ plus the bias-compensation term selected by `bias_compensation`.
+        // tau_safe_ : ASIF-certified torque (only used when constraint_aware).
         Eigen::VectorXd tau_ctrl_;
         Eigen::VectorXd tau_des_;
         Eigen::VectorXd tau_safe_;
@@ -253,10 +274,7 @@ namespace xarm_geo {
     //
     // Public config:
     //   - constraint_aware    (default false): direction-preserving rescale
-    //                         so |v_i| <= model.limits[i].q_vel_max. Note
-    //                         this is a uniform (not per-axis) scaling: if
-    //                         one joint exceeds its limit by 10x, all
-    //                         joints get scaled to 10%.
+    //                         so |v_i| <= model.limits[i].q_vel_max.
     //   - refresh_kinematics  (default false): call compute_jacobians before
     //                         the hook (some hooks read ee-side info).
     //
@@ -294,21 +312,23 @@ namespace xarm_geo {
     //
     // Refresh policy:
     //   - kinematics : gated by refresh_kinematics (default false).
-    //   - dynamics   : gated by refresh_dynamics  (default false).
+    //   - dynamics   : gated by refresh_dynamics  (default false). When
+    //                  enabled, the base populates data.M and data.h up
+    //                  front; data.g is populated up front iff the user's
+    //                  bias_compensation policy is GravityOnly.
     //
     // Public config:
     //   - refresh_kinematics (default false).
     //   - refresh_dynamics   (default false).
-    //   - compensate_bias    (default false): base adds h(q,v) to the
-    //                        hook's joint torque. Enable if the user's
-    //                        torque does NOT already account for
-    //                        gravity/Coriolis.
-    //   - constraint_aware   (default false): apply ASIF; requires
-    //                        attach_collision.
+    //   - bias_compensation  (default None): see `BiasCompensation` enum for semantics.
+    //   - constraint_aware   (default false): apply ASIF; requires attach_collision.
     //   - asif_options.
     //
     // Pipeline (after hook):
-    //   tau_des = tau_ctrl + (compensate_bias ? data.h : 0)
+    //   switch (bias_compensation):
+    //     None        -> tau_des = tau_ctrl
+    //     GravityOnly -> tau_des = tau_ctrl + data.g
+    //     Full        -> tau_des = tau_ctrl + data.h
     //   out.tau = constraint_aware ? asif_filter(tau_des) : tau_des
 
     class DynamicJointControllerBase {
@@ -323,14 +343,17 @@ namespace xarm_geo {
         void detach_collision() noexcept;
 
         // --- Public Configuration ---
-        bool compensate_bias = false;
+        BiasCompensation bias_compensation = BiasCompensation::None;
         bool refresh_kinematics = false;
         bool refresh_dynamics = false;
         bool constraint_aware = false;
         ASIFOptions asif_options;
 
     protected:
-        // Hook contract: see KinematicJointControllerBase + dynamics.
+        // Hook contract: see KinematicJointControllerBase + dynamics. data.M
+        // is fresh iff refresh_dynamics; data.h is fresh iff
+        // refresh_dynamics OR bias_compensation == Full; data.g is fresh
+        // iff refresh_dynamics OR bias_compensation == GravityOnly.
         virtual auto compute_command_torque(const Model &model, Data &data,
                                             const JointControllerContext &ctx,
                                             JointTorque &tau_ctrl) noexcept -> bool = 0;
@@ -340,7 +363,7 @@ namespace xarm_geo {
 
         // Pre-allocated joint-sized scratch (sized in the constructor).
         // tau_ctrl_ : the joint torque produced by the user's control law.
-        // tau_des_  : tau_ctrl_ + (compensate_bias ? data.h : 0).
+        // tau_des_  : tau_ctrl_ plus the bias-compensation term selected by `bias_compensation`.
         // tau_safe_ : ASIF-certified torque (only used when constraint_aware).
         JointTorque tau_ctrl_;
         Eigen::VectorXd tau_des_;
@@ -350,8 +373,7 @@ namespace xarm_geo {
     // --- Published Concepts ---
     //
     // Recommended usage: write controllers as subclasses; use these concepts
-    // when authoring generic library code that takes "any controller of
-    // category X".
+    // when authoring generic library code that takes "any controller of category X".
 
     template <typename T>
     concept KinematicTaskController =

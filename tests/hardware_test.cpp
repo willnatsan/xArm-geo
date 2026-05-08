@@ -10,6 +10,7 @@
 #include <xarm_geo/control/controller.h>
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
+#include <xarm_geo/examples/controllers/joint_p_controller.h>
 #include <xarm_geo/examples/trajectories/joint_ptp.h>
 #include <xarm_geo/examples/trajectories/tilting_circle.h>
 #include <xarm_geo/interfaces/hardware.h>
@@ -45,34 +46,13 @@
 
 namespace {
 
-    // --- Simple Joint-Space PD Controller ---
-    //
-    // File-local concrete subclass of KinematicJointControllerBase. Computes
-    //   v = v_ref + kp * (q_ref - q)
-    class JointPDController final : public xarm_geo::KinematicJointControllerBase {
-    public:
-        explicit JointPDController(const xarm_geo::Model &model)
-            : xarm_geo::KinematicJointControllerBase(model) {}
-
-        // --- Public Configuration ---
-        double kp = 5.0;
-
-    protected:
-        auto compute_command_velocity(const xarm_geo::Model & /*model*/, xarm_geo::Data & /*data*/,
-                                      const xarm_geo::JointControllerContext &ctx,
-                                      xarm_geo::JointVelocity &v_ctrl) noexcept -> bool override {
-            v_ctrl.v = ctx.ref.v + kp * (ctx.ref.q - ctx.fb.q);
-            return true;
-        }
-    };
-
     // --- Phase Runners ---
 
-    // Joint-PTP execution loop. Drives a JointPDController against the JointSpaceTrajectory.
+    // Joint-PTP execution loop. Drives a JointPController against the JointSpaceTrajectory.
     template <xarm_geo::JointSpaceTrajectory T>
     auto run_joint_ptp_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
-                          xarm_geo::Data &data, JointPDController &controller, const T &traj,
-                          double duration, xarm_geo::JointState &state,
+                          xarm_geo::Data &data, xarm_geo::controllers::JointPController &controller,
+                          const T &traj, double duration, xarm_geo::JointState &state,
                           xarm_geo::JointVelocity &control_target) -> bool {
 
         const double dt = 0.002;
@@ -89,7 +69,7 @@ namespace {
             const xarm_geo::JointControllerContext ctx{state, target, dt_ns};
             if (controller.update(model, data, ctx, control_target) !=
                 xarm_geo::ControllerStatus::OK) {
-                std::cerr << "JointPDController update failed.\n";
+                std::cerr << "JointPController update failed.\n";
                 return false;
             }
             if (hw.write(control_target) != xarm_geo::InterfaceStatus::OK) { return false; }
@@ -199,10 +179,11 @@ int main(int argc, char *argv[]) {
         }
 
         // --- Controller Setup ---
-        // Joint-space PD controller for the PTP phases.
-        JointPDController joint_controller(model);
+        // Joint-space P controller for the PTP phases.
+        xarm_geo::controllers::JointPController joint_controller(model);
+        joint_controller.kp.setConstant(5.0);
+        joint_controller.use_feedforward = true;
         joint_controller.constraint_aware = true;
-        joint_controller.kp = 5.0;
 
         // Task-space geometric P controller
         xarm_geo::controllers::GeometricPController p_controller(model);

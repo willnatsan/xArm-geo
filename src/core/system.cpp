@@ -24,6 +24,7 @@ namespace xarm_geo {
         // --- Dynamics Outputs ---
         M.setZero(dof, dof);
         h.setZero(dof);
+        g.setZero(dof);
         tau_out.setZero(dof);
         a_out.setZero(dof);
 
@@ -39,6 +40,12 @@ namespace xarm_geo {
 
         // --- Internal Bias-Force Workspace ---
         bias.a_zero.setZero(dof);
+
+        // --- Internal Coriolis-Times Workspace ---
+        coriolis.v_sum.setZero(dof);
+        coriolis.b_sum.setZero(dof);
+        coriolis.b_a.setZero(dof);
+        coriolis.b_b.setZero(dof);
 
         // --- Internal CRBA Workspace ---
         crba.I_C.assign(dof, manifold::SE3::SpatialInertia::Zero());

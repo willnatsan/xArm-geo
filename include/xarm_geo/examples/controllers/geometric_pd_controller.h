@@ -31,6 +31,17 @@ namespace xarm_geo::controllers {
     // M(q) is factorised internally each tick when use_feedforward = true.
     // If the factorisation fails (M not PD), the FF term is dropped for that
     // tick (debug-logged) and the P+D path still runs.
+    //
+    // TODO(geometric-fidelity): the operational-space inertial feedforward
+    // term -ad_{xi_e}^* * Lambda * (Ad * xi_d) uses xi_e (body twist error,
+    // built from the ACTUAL body twist xi). This is the SE(3) analogue of
+    // Computed-Torque Control on the operational-space inertia. A fully
+    // faithful Bullo & Murray task-space PD would replace this with a term
+    // derived from the covariant derivative on SE(3) under the Lambda
+    // metric, which would evaluate the Coriolis-like coupling at the
+    // REFERENCE twist Ad * xi_d. Tracked separately; see joint_pd_controller.h
+    // for the joint-space analogue, which is geometrically faithful via
+    // compute_coriolis_times.
 
     class GeometricPDController final : public DynamicTaskControllerBase {
     public:

@@ -90,8 +90,9 @@ namespace xarm_geo {
         Eigen::VectorXd v_out;    // Results of Inverse Differential Kinematics
 
         // --- Dynamics Outputs ---
-        Eigen::MatrixXd M;        // Joint-space Mass Matrix
-        Eigen::VectorXd h;        // Bias Forces: Coriolis (+ Gravity if model.gravity != 0)
+        Eigen::MatrixXd M;        // Joint-space Mass Matrix (CRBA)
+        Eigen::VectorXd h;        // Full Bias Forces: C(q,v)v + g(q)
+        Eigen::VectorXd g;        // Gravity Forces: g(q)  (zero when model.gravity == 0)
         Eigen::VectorXd tau_out;  // Results of Inverse Dynamics
         Eigen::VectorXd a_out;    // Results of Forward Dynamics
 
@@ -115,6 +116,14 @@ namespace xarm_geo {
         struct BiasWorkspace {
             Eigen::VectorXd a_zero;
         } bias;
+
+        // Workspace for Coriolis-Times Computation (Symmetric Levi-Civita Form)
+        struct CoriolisWorkspace {
+            Eigen::VectorXd v_sum;  // v_a + v_b
+            Eigen::VectorXd b_sum;  // RNEA(q, v_a + v_b, 0)
+            Eigen::VectorXd b_a;    // RNEA(q, v_a, 0)
+            Eigen::VectorXd b_b;    // RNEA(q, v_b, 0)
+        } coriolis;
 
         // Workspace for Composite Rigid Body Algorithm
         struct CRBAWorkspace {

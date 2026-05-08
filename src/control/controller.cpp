@@ -95,13 +95,21 @@ namespace xarm_geo {
         data.q = ctx.fb.q;
         compute_jacobians(model, data);
 
-        // Optional dynamics refresh: populate data.M and data.h before the
-        // hook so the user's control law can read them directly.
+        // Optional dynamics refresh: populate data.M, data.h, and data.g
+        // before the hook so the user's control law can read them directly.
+        //
+        // data.g is only refreshed when the policy is GravityOnly to avoid
+        // a redundant RNEA pass for Full / None.
         bool h_fresh = false;
+        bool g_fresh = false;
         if (refresh_dynamics) {
             compute_mass_matrix(model, data);
             compute_bias_forces(model, data, ctx.fb.v);
             h_fresh = true;
+            if (bias_compensation == BiasCompensation::GravityOnly) {
+                compute_gravity_forces(model, data);
+                g_fresh = true;
+            }
         }
 
         // Derived class produces the body-frame end-effector wrench.
@@ -113,12 +121,19 @@ namespace xarm_geo {
         // Project task-space wrench to joint torques.
         tau_ctrl_.noalias() = data.body_jacobian.transpose() * cmd_wrench.coeffs;
 
-        // Optional bias-force compensation (gravity + Coriolis if model.gravity != 0).
-        if (compensate_bias) {
+        // Bias-force compensation: append the term selected by `bias_compensation`.
+        switch (bias_compensation) {
+        case BiasCompensation::None:
+            tau_des_ = tau_ctrl_;
+            break;
+        case BiasCompensation::GravityOnly:
+            if (!g_fresh) { compute_gravity_forces(model, data); }
+            tau_des_ = tau_ctrl_ + data.g;
+            break;
+        case BiasCompensation::Full:
             if (!h_fresh) { compute_bias_forces(model, data, ctx.fb.v); }
             tau_des_ = tau_ctrl_ + data.h;
-        } else {
-            tau_des_ = tau_ctrl_;
+            break;
         }
 
         // Optional ASIF certification stage.
@@ -130,7 +145,7 @@ namespace xarm_geo {
 
             // NOTE: this convenience overload of asif_filter recomputes
             // data.M and data.h internally. If the user has already
-            // populated them (refresh_dynamics or compensate_bias).
+            // populated them (refresh_dynamics or bias_compensation == Full).
             //
             // TODO: switch to the composable overload of
             // asif_filter once the default-barrier list is plumbed through.
@@ -219,25 +234,40 @@ namespace xarm_geo {
         data.q = ctx.fb.q;
         if (refresh_kinematics) { compute_jacobians(model, data); }
 
-        // Optional dynamics refresh: populate data.M and data.h before the
-        // hook so the user's control law can read them directly.
+        // Optional dynamics refresh: populate data.M, data.h, and data.g
+        // before the hook so the user's control law can read them directly.
+        //
+        // data.g is only refreshed when the policy is GravityOnly to avoid
+        // a redundant RNEA pass for Full / None.
         bool h_fresh = false;
+        bool g_fresh = false;
         if (refresh_dynamics) {
             compute_mass_matrix(model, data);
             compute_bias_forces(model, data, ctx.fb.v);
             h_fresh = true;
+            if (bias_compensation == BiasCompensation::GravityOnly) {
+                compute_gravity_forces(model, data);
+                g_fresh = true;
+            }
         }
 
         if (!compute_command_torque(model, data, ctx, tau_ctrl_)) {
             return ControllerStatus::HOOK_FAILED;
         }
 
-        // Optional bias-force compensation (gravity + Coriolis if model.gravity != 0).
-        if (compensate_bias) {
+        // Bias-force compensation: append the term selected by `bias_compensation`.
+        switch (bias_compensation) {
+        case BiasCompensation::None:
+            tau_des_ = tau_ctrl_.tau;
+            break;
+        case BiasCompensation::GravityOnly:
+            if (!g_fresh) { compute_gravity_forces(model, data); }
+            tau_des_ = tau_ctrl_.tau + data.g;
+            break;
+        case BiasCompensation::Full:
             if (!h_fresh) { compute_bias_forces(model, data, ctx.fb.v); }
             tau_des_ = tau_ctrl_.tau + data.h;
-        } else {
-            tau_des_ = tau_ctrl_.tau;
+            break;
         }
 
         // Optional ASIF certification stage.

@@ -8,6 +8,7 @@
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
 #include <xarm_geo/examples/controllers/geometric_pd_controller.h>
+#include <xarm_geo/examples/controllers/joint_p_controller.h>
 #include <xarm_geo/examples/trajectories/figure_eight.h>
 #include <xarm_geo/examples/trajectories/inner_cavity_scan.h>
 #include <xarm_geo/examples/trajectories/joint_ptp.h>
@@ -31,15 +32,18 @@ struct TestParams {
                                    // asif_filter (dynamic)
 };
 
-auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::JointPTP &traj,
-                   double duration, xarm_geo::JointState &state,
-                   xarm_geo::JointVelocity &control_target) -> bool {
+auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::Model &model, xarm_geo::Data &data,
+                   xarm_geo::controllers::JointPController &joint_controller,
+                   const xarm_geo::trajectories::JointPTP &traj, double duration,
+                   xarm_geo::JointState &state, xarm_geo::JointVelocity &control_target) -> bool {
 
     double t = 0.0;
     double physics_dt = 0.002;
     double render_dt = 1.0 / 60.0;
     double last_render_t = 0.0;
-    double kp_joint = 5.0;
+
+    const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(physics_dt));
 
     xarm_geo::JointSpaceTarget joint_target(state.q.size());
 
@@ -48,8 +52,11 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::trajectories::Join
 
         if (traj.evaluate(t, joint_target) != xarm_geo::TrajectoryStatus::OK) { return false; }
 
-        for (size_t i = 0; i < control_target.v.size(); ++i) {
-            control_target.v[i] = joint_target.v[i] + (kp_joint * (joint_target.q[i] - state.q[i]));
+        const xarm_geo::JointControllerContext ctx{state, joint_target, dt_ns};
+        if (joint_controller.update(model, data, ctx, control_target) !=
+            xarm_geo::ControllerStatus::OK) {
+            std::cerr << "JointPController update failed.\n";
+            return false;
         }
 
         if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { return false; }
@@ -115,6 +122,12 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
         std::cout << "[PRE-FLIGHT] Trajectory Validated!\n";
     }
 
+    // --- Joint-Space PTP Controller (Phases 1 and 3) ---
+
+    xarm_geo::controllers::JointPController joint_controller(model);
+    joint_controller.kp.setConstant(5.0);
+    joint_controller.use_feedforward = true;
+
     // --- PHASE 1: HOME TO START ---
 
     double start_duration = 3.0;
@@ -122,7 +135,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     std::cout << "\n[PHASE 1] Moving from Home to Trajectory Start...\n";
     xarm_geo::trajectories::JointPTP approach_traj(q_home, q_start, start_duration);
 
-    if (!run_joint_ptp(sim, approach_traj, start_duration, state, control_target)) {
+    if (!run_joint_ptp(sim, model, data, joint_controller, approach_traj, start_duration, state,
+                       control_target)) {
         std::cerr << "Failed during Phase 1 Approach.\n";
         return 1;
     }
@@ -157,8 +171,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     // --- Controller Setup ---
     //
-    // Kinematic mode: GeometricPController emits JointVelocity. Defaults
-    // (kp_pos = kp_rot = 8) preserve the previously hard-coded behaviour;
+    // Kinematic mode: GeometricPController emits JointVelocity.
 
     xarm_geo::controllers::GeometricPController p_controller(model);
     p_controller.gains.kp_pos.setConstant(8.0);
@@ -178,7 +191,10 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     pd_controller.gains.kd_ang.setConstant(10.0);
 
     pd_controller.use_feedforward = params.feedforward;
-    pd_controller.compensate_bias = true;  // model.gravity is non-zero in torque mode
+    // model.gravity is non-zero in torque mode; the existing GeometricPDController
+    // emits a Computed-Torque-style operational-space FF, so the base must inject
+    // the full bias forces (Coriolis + gravity) to cancel the actual nonlinear dynamics.
+    pd_controller.bias_compensation = xarm_geo::BiasCompensation::Full;
     pd_controller.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { pd_controller.attach_collision(col_model, col_data); }
 
@@ -331,7 +347,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     }
 
     xarm_geo::trajectories::JointPTP return_traj(state.q, q_home, end_duration);
-    if (!run_joint_ptp(sim, return_traj, end_duration, state, control_target)) {
+    if (!run_joint_ptp(sim, model, data, joint_controller, return_traj, end_duration, state,
+                       control_target)) {
         std::cerr << "Failed during Phase 3 Return.\n";
         return 1;
     }

@@ -164,4 +164,55 @@ namespace xarm_geo {
         // Store resulting Joint Torques as the Bias Forces `h`
         data.h = data.tau_out;
     };
+
+    void compute_gravity_forces(const Model &model, Data &data) {
+
+        // Inverse dynamics with zero velocity AND zero acceleration:
+        //   tau = M(q) * 0 + C(q, 0) * 0 + g(q) = g(q).
+        // Reuses `data.bias.a_zero` as both the v and a argument to avoid
+        // allocating a second zero-vector.
+        inverse_dynamics(model, data, data.bias.a_zero, data.bias.a_zero);
+
+        // Store resulting Joint Torques as the Gravity Forces `g`
+        data.g = data.tau_out;
+    };
+
+    void compute_coriolis_times(const Model &model, Data &data,
+                                const Eigen::Ref<const Eigen::VectorXd> &v_a,
+                                const Eigen::Ref<const Eigen::VectorXd> &v_b,
+                                Eigen::Ref<Eigen::VectorXd> out) {
+
+        assert(v_a.size() == model.dof && "v_a size must equal model.dof");
+        assert(v_b.size() == model.dof && "v_b size must equal model.dof");
+        assert(out.size() == model.dof && "out size must equal model.dof");
+
+        // --- Polarisation Identity (Symmetric Levi-Civita Form) ---
+        //
+        //   2 * C(q, v_a) * v_b
+        //     = RNEA(q, v_a + v_b, 0) - RNEA(q, v_a, 0) - RNEA(q, v_b, 0) + g(q)
+        //
+        // Each RNEA(q, v, 0) returns C(q, v) * v + g(q); the four-way
+        // combination cancels the three g(q) contributions and isolates the
+        // symmetric cross term 2 * C(q, v_a) * v_b.
+
+        // 1) RNEA(q, v_a, 0) -> data.coriolis.b_a
+        inverse_dynamics(model, data, v_a, data.bias.a_zero);
+        data.coriolis.b_a = data.tau_out;
+
+        // 2) RNEA(q, v_b, 0) -> data.coriolis.b_b
+        inverse_dynamics(model, data, v_b, data.bias.a_zero);
+        data.coriolis.b_b = data.tau_out;
+
+        // 3) RNEA(q, v_a + v_b, 0) -> data.coriolis.b_sum
+        data.coriolis.v_sum = v_a + v_b;
+        inverse_dynamics(model, data, data.coriolis.v_sum, data.bias.a_zero);
+        data.coriolis.b_sum = data.tau_out;
+
+        // 4) g(q) -> data.g  (also overwrites data.tau_out)
+        compute_gravity_forces(model, data);
+
+        // Combine: out = 0.5 * (b_sum - b_a - b_b + g)
+        out.noalias() =
+            0.5 * (data.coriolis.b_sum - data.coriolis.b_a - data.coriolis.b_b + data.g);
+    };
 }  // namespace xarm_geo

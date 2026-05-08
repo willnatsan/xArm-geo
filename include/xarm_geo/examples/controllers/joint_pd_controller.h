@@ -32,25 +32,6 @@ namespace xarm_geo::controllers {
     //
     // The Coriolis bilinear C(q, q_dot) * r_dot is computed via the
     // symmetric polarisation identity in `compute_coriolis_times`.
-    //
-    // Recommended user setup:
-    //   - use_inertial_ff = true, use_coriolis_ff = true (defaults): strict
-    //     Bullo & Murray law. Set use_coriolis_ff = false for the textbook
-    //     'pure inertial FF' simplification (valid when r_dot is small).
-    //     The (false, true) combination is unusual but permitted (e.g.
-    //     ablation studies isolating the Coriolis contribution).
-    //
-    //   - bias_compensation = BiasCompensation::GravityOnly (constructor
-    //     default, see kRecommendedBiasCompensation): the base adds g(q)
-    //     after the hook, completing the law with the gravity term. Final
-    //     torque: -K_p e - K_d e_d + M r_ddot + C(q,q_dot) r_dot + g(q).
-    //
-    //   - Note: For real xArm hardware (SDK pre-compensates gravity): override
-    //     the default by setting bias_compensation = BiasCompensation::None
-    //     after construction, and leave model.gravity = 0.
-    //
-    //   - Safety: attach_collision(...) and constraint_aware = true to
-    //     route the resulting torque through ASIF.
 
     class JointPDController final : public DynamicJointControllerBase {
     public:

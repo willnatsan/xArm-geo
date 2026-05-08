@@ -187,3 +187,6 @@ if (BUILD_WITH_REAL_XARM)
     add_executable(hardware tests/hardware_test.cpp)
     target_link_libraries(hardware PRIVATE ${PROJECT_NAME})
 endif()
+
+add_executable(examples_compilation tests/examples_compile_test.cpp)
+target_link_libraries(examples_compilation PRIVATE ${PROJECT_NAME})

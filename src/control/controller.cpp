@@ -33,13 +33,19 @@ namespace xarm_geo {
             return ControllerStatus::SIZE_MISMATCH;
         }
 
-        // Sync canonical state and refresh kinematic tree + Jacobians.
+        // Sync canonical state
         data.q = ctx.fb.q;
+
+        // Mandatory kinematics refresh: populate data.body_jacobian, data.ee_pose, etc.
+        // Note: Mandatory, as updated kinematics are always required (task-space -> joint-space)
         compute_jacobians(model, data);
+
+        // Construct hook-side cache (kinematics already fresh; reads through `kin` are free).
+        KinematicsCache kin(model, data, /*kin_fresh=*/true);
 
         // Derived class produces the body-frame command twist.
         manifold::SE3::Twist cmd_twist;
-        if (!compute_command_twist(model, data, ctx, cmd_twist)) {
+        if (!compute_command_twist(model, data, kin, ctx, cmd_twist)) {
             return ControllerStatus::HOOK_FAILED;
         }
 
@@ -91,20 +97,25 @@ namespace xarm_geo {
             return ControllerStatus::SIZE_MISMATCH;
         }
 
-        // Sync canonical state and refresh kinematic tree + Jacobians.
+        // Sync canonical state
         data.q = ctx.fb.q;
+
+        // Mandatory kinematics refresh: populate data.body_jacobian, data.ee_pose, etc.
+        // Note: Mandatory, as updated kinematics are always required (task-space -> joint-space)
         compute_jacobians(model, data);
 
         // Optional dynamics refresh: populate data.M, data.h, and data.g
-        // before the hook so the user's control law can read them directly.
+        // before the hook so the user's control law can read them directly via `dyn`.
         //
         // data.g is only refreshed when the policy is GravityOnly to avoid
         // a redundant RNEA pass for Full / None.
+        bool m_fresh = false;
         bool h_fresh = false;
         bool g_fresh = false;
         if (refresh_dynamics) {
             compute_mass_matrix(model, data);
             compute_bias_forces(model, data, ctx.fb.v);
+            m_fresh = true;
             h_fresh = true;
             if (bias_compensation == BiasCompensation::GravityOnly) {
                 compute_gravity_forces(model, data);
@@ -112,9 +123,13 @@ namespace xarm_geo {
             }
         }
 
+        // Construct hook-side caches.
+        KinematicsCache kin(model, data, /*kin_fresh=*/true);
+        DynamicsCache dyn(model, data, ctx.fb.v, m_fresh, h_fresh, g_fresh);
+
         // Derived class produces the body-frame end-effector wrench.
         manifold::SE3::Wrench cmd_wrench;
-        if (!compute_command_wrench(model, data, ctx, cmd_wrench)) {
+        if (!compute_command_wrench(model, data, kin, dyn, ctx, cmd_wrench)) {
             return ControllerStatus::HOOK_FAILED;
         }
 
@@ -122,17 +137,16 @@ namespace xarm_geo {
         tau_ctrl_.noalias() = data.body_jacobian.transpose() * cmd_wrench.coeffs;
 
         // Bias-force compensation: append the term selected by `bias_compensation`.
+        // Reads route through `dyn` so the cache memoises across hook + base usage.
         switch (bias_compensation) {
         case BiasCompensation::None:
             tau_des_ = tau_ctrl_;
             break;
         case BiasCompensation::GravityOnly:
-            if (!g_fresh) { compute_gravity_forces(model, data); }
-            tau_des_ = tau_ctrl_ + data.g;
+            tau_des_ = tau_ctrl_ + dyn.g();
             break;
         case BiasCompensation::Full:
-            if (!h_fresh) { compute_bias_forces(model, data, ctx.fb.v); }
-            tau_des_ = tau_ctrl_ + data.h;
+            tau_des_ = tau_ctrl_ + dyn.h();
             break;
         }
 
@@ -143,12 +157,8 @@ namespace xarm_geo {
                 return ControllerStatus::NOT_CONFIGURED;
             }
 
-            // NOTE: this convenience overload of asif_filter recomputes
-            // data.M and data.h internally. If the user has already
-            // populated them (refresh_dynamics or bias_compensation == Full).
-            //
-            // TODO: switch to the composable overload of
-            // asif_filter once the default-barrier list is plumbed through.
+            // TODO: switch to the composable asif_filter overload to avoid recomputing
+            // data.M / data.h when the base has already populated them.
             const ASIFStatus status = asif_filter(model, data, *col_model_, *col_data_, ctx.fb.v,
                                                   tau_des_, tau_safe_, asif_options);
 
@@ -182,22 +192,31 @@ namespace xarm_geo {
         data.q = ctx.fb.q;
         if (refresh_kinematics) { compute_jacobians(model, data); }
 
-        if (!compute_command_velocity(model, data, ctx, v_ctrl_)) {
+        // Construct hook-side cache; lazy-refreshes on first access if the
+        // eager refresh above was skipped.
+        KinematicsCache kin(model, data, /*kin_fresh=*/refresh_kinematics);
+
+        if (!compute_command_velocity(model, data, kin, ctx, v_ctrl_)) {
             return ControllerStatus::HOOK_FAILED;
         }
 
         // Direction-preserving velocity-limit rescale.
+        //
+        // For each joint, compute the over-limit factor abs_vel / limit; track the largest
+        // over all joints. If any joint exceeds its limit, divide the whole velocity vector
+        // by that factor -- this clamps the worst-offending joint exactly to its limit and
+        // reduces the rest proportionally, preserving the direction of v_ctrl in joint space.
         if (constraint_aware) {
-            double max_scale_factor = 1.0;
+            double max_excess_factor = 1.0;
             for (int i = 0; i < model.dof; ++i) {
                 const double abs_vel = std::abs(v_ctrl_.v(i));
                 const double limit = model.limits[i].q_vel_max;
                 if (limit > 0.0 && abs_vel > limit) {
-                    const double scale = abs_vel / limit;
-                    max_scale_factor = std::max(scale, max_scale_factor);
+                    const double excess = abs_vel / limit;
+                    max_excess_factor = std::max(excess, max_excess_factor);
                 }
             }
-            if (max_scale_factor > 1.0) { v_ctrl_.v /= max_scale_factor; }
+            if (max_excess_factor > 1.0) { v_ctrl_.v /= max_excess_factor; }
         }
 
         out.v = v_ctrl_.v;
@@ -232,18 +251,22 @@ namespace xarm_geo {
 
         // Sync canonical state.
         data.q = ctx.fb.q;
+
+        // Optional kinematics refresh: populate data.body_jacobian, data.ee_pose, etc.
         if (refresh_kinematics) { compute_jacobians(model, data); }
 
         // Optional dynamics refresh: populate data.M, data.h, and data.g
-        // before the hook so the user's control law can read them directly.
+        // before the hook so the user's control law can read them directly via `dyn`.
         //
         // data.g is only refreshed when the policy is GravityOnly to avoid
         // a redundant RNEA pass for Full / None.
+        bool m_fresh = false;
         bool h_fresh = false;
         bool g_fresh = false;
         if (refresh_dynamics) {
             compute_mass_matrix(model, data);
             compute_bias_forces(model, data, ctx.fb.v);
+            m_fresh = true;
             h_fresh = true;
             if (bias_compensation == BiasCompensation::GravityOnly) {
                 compute_gravity_forces(model, data);
@@ -251,22 +274,25 @@ namespace xarm_geo {
             }
         }
 
-        if (!compute_command_torque(model, data, ctx, tau_ctrl_)) {
+        // Construct hook-side caches; lazy-refresh on first access if eager refresh skipped.
+        KinematicsCache kin(model, data, /*kin_fresh=*/refresh_kinematics);
+        DynamicsCache dyn(model, data, ctx.fb.v, m_fresh, h_fresh, g_fresh);
+
+        if (!compute_command_torque(model, data, kin, dyn, ctx, tau_ctrl_)) {
             return ControllerStatus::HOOK_FAILED;
         }
 
         // Bias-force compensation: append the term selected by `bias_compensation`.
+        // Reads route through `dyn` so the cache memoises across hook + base usage.
         switch (bias_compensation) {
         case BiasCompensation::None:
             tau_des_ = tau_ctrl_.tau;
             break;
         case BiasCompensation::GravityOnly:
-            if (!g_fresh) { compute_gravity_forces(model, data); }
-            tau_des_ = tau_ctrl_.tau + data.g;
+            tau_des_ = tau_ctrl_.tau + dyn.g();
             break;
         case BiasCompensation::Full:
-            if (!h_fresh) { compute_bias_forces(model, data, ctx.fb.v); }
-            tau_des_ = tau_ctrl_.tau + data.h;
+            tau_des_ = tau_ctrl_.tau + dyn.h();
             break;
         }
 
@@ -277,8 +303,7 @@ namespace xarm_geo {
                 return ControllerStatus::NOT_CONFIGURED;
             }
 
-            // NOTE: see DynamicTaskControllerBase for the same TODO regarding
-            // redundant data.M / data.h recomputation inside asif_filter.
+            // TODO: see DynamicTaskControllerBase for the same asif_filter redundancy.
             const ASIFStatus status = asif_filter(model, data, *col_model_, *col_data_, ctx.fb.v,
                                                   tau_des_, tau_safe_, asif_options);
 

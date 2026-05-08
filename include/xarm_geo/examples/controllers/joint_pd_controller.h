@@ -57,8 +57,8 @@ namespace xarm_geo::controllers {
         bool use_coriolis_ff = true;  // Include C(q, q_dot) * r_dot in the FF.
 
     protected:
-        auto compute_command_torque(const Model &model, Data &data,
-                                    const JointControllerContext &ctx,
+        auto compute_command_torque(const Model &model, Data &data, KinematicsCache & /*kin*/,
+                                    DynamicsCache &dyn, const JointControllerContext &ctx,
                                     JointTorque &tau_ctrl) noexcept -> bool override {
 
             // Hook-side size checks (gain vectors + joint-space target).
@@ -74,19 +74,18 @@ namespace xarm_geo::controllers {
 
             // Inertial feedforward: tau_FF += M(q) * r_ddot.
             if (use_inertial_ff) {
-                // Refresh M(q) only if the base did not already do so.
-                if (!refresh_dynamics) { compute_mass_matrix(model, data); }
-                Mqdd_r_.noalias() = data.M * ctx.ref.a;
+                Mqdd_r_.noalias() = dyn.M() * ctx.ref.a;
                 tau_ctrl.tau.noalias() += Mqdd_r_;
             }
 
             // Geometric Coriolis feedforward: tau_FF += C(q, q_dot) * r_dot,
-            // via the symmetric Levi-Civita Christoffel form.
+            // via the symmetric Levi-Civita Christoffel form. Pull g(q) through
+            // the cache first, so compute_coriolis_times can skip its internal
+            // gravity recomputation regardless of bias_compensation.
             if (use_coriolis_ff) {
-                const bool g_already_fresh =
-                    refresh_dynamics && bias_compensation == BiasCompensation::GravityOnly;
+                (void)dyn.g();  // ensure data.g is fresh and cached
                 compute_coriolis_times(model, data, ctx.fb.v, ctx.ref.v, C_qdot_rdot_,
-                                       g_already_fresh);
+                                       /*g_fresh=*/true);
                 tau_ctrl.tau.noalias() += C_qdot_rdot_;
             }
 

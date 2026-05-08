@@ -8,7 +8,6 @@
 #include <xarm_geo/control/tracking.h>
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/system.h>
-#include <xarm_geo/modelling/dynamics.h>
 #include <xarm_geo/utils/debug.h>
 
 namespace xarm_geo::controllers {
@@ -48,25 +47,25 @@ namespace xarm_geo::controllers {
 
         // --- Public Configuration ---
         SE3TrackingGains gains;
-        bool use_feedforward = true;
-        double c2 = 0.0;  // mixed-state coupling (Goodarzi); set > 0 to enable mixing
+        bool use_feedforward = true;  // Operational-space inertial feedforward
+        double c2 = 0.0;              // mixed-state coupling (Goodarzi); set > 0 to enable mixing
         Eigen::Vector3d sigma_lin =
             Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
         Eigen::Vector3d sigma_ang =
             Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
 
     protected:
-        auto compute_command_wrench(const Model &model, Data &data,
-                                    const TaskControllerContext &ctx,
+        auto compute_command_wrench(const Model & /*model*/, Data & /*data*/, KinematicsCache &kin,
+                                    DynamicsCache &dyn, const TaskControllerContext &ctx,
                                     manifold::SE3::Wrench &cmd_wrench) noexcept -> bool override {
 
             // Current body-frame end-effector twist.
-            const manifold::SE3::Twist body_twist = data.body_jacobian * ctx.fb.v;
+            const manifold::SE3::Twist body_twist = kin.body_jacobian() * ctx.fb.v;
 
             // Body-frame configuration error and transported reference twist.
             // Hardcoded to Lie-group gradient (integrating log-map gradient is
             // unsafe near theta = pi due to branch-cut accumulation).
-            const manifold::SE3 g_e = data.ee_pose.inverse() * ctx.ref.pose;
+            const manifold::SE3 g_e = kin.ee_pose().inverse() * ctx.ref.pose;
             const manifold::SE3::Twist grad =
                 se3_lie_group_gradient(g_e, gains.kp_pos, gains.kp_rot);
             ad_xi_d_ = g_e.Ad() * ctx.ref.twist;
@@ -93,15 +92,14 @@ namespace xarm_geo::controllers {
 
             // Optional inertial feedforward via operational-space inertia.
             if (use_feedforward) {
-                compute_mass_matrix(model, data);
-                M_llt_.compute(data.M);
+                M_llt_.compute(dyn.M());
 
                 if (M_llt_.info() == Eigen::Success) {
                     // M_inv_Jt = M^{-1} * J_b^T   ((dof x dof) x (dof x 6) -> (dof x 6))
-                    M_inv_Jt_.noalias() = M_llt_.solve(data.body_jacobian.transpose());
+                    M_inv_Jt_.noalias() = M_llt_.solve(kin.body_jacobian().transpose());
 
                     // Lambda = (J_b * M_inv_Jt)^{-1}  (6 x 6)
-                    lambda_.noalias() = data.body_jacobian * M_inv_Jt_;
+                    lambda_.noalias() = kin.body_jacobian() * M_inv_Jt_;
                     lambda_ = lambda_.inverse().eval();
 
                     // Closed-form d/dt(Ad * xi_d).
@@ -134,5 +132,6 @@ namespace xarm_geo::controllers {
 
     // --- Compile-Time Concept Verification ---
     static_assert(xarm_geo::DynamicTaskController<GeometricPIDController>);
+    static_assert(xarm_geo::ResettableController<GeometricPIDController>);
 
 }  // namespace xarm_geo::controllers

@@ -34,16 +34,16 @@ namespace xarm_geo::controllers {
 
         // --- Public Configuration ---
         SE3TrackingGains gains;
-        bool use_feedforward = true;
+        bool use_feedforward = true;  // Kinematic feedforward (Transported reference twist)
         GradientType gradient = GradientType::LieGroup;
 
     protected:
-        auto compute_command_twist(const Model & /*model*/, Data &data,
+        auto compute_command_twist(const Model & /*model*/, Data & /*data*/, KinematicsCache &kin,
                                    const TaskControllerContext &ctx,
                                    manifold::SE3::Twist &cmd_twist) noexcept -> bool override {
 
             // Body-frame configuration error: g_e = g^{-1} * g_d.
-            const manifold::SE3 g_e = data.ee_pose.inverse() * ctx.ref.pose;
+            const manifold::SE3 g_e = kin.ee_pose().inverse() * ctx.ref.pose;
 
             // Body-frame gradient (NF or log-map per `gradient`).
             const manifold::SE3::Twist grad =

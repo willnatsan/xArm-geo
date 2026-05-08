@@ -45,7 +45,7 @@ namespace xarm_geo::controllers {
 
     protected:
         auto compute_command_velocity(const Model &model, Data & /*data*/,
-                                      const JointControllerContext &ctx,
+                                      KinematicsCache & /*kin*/, const JointControllerContext &ctx,
                                       JointVelocity &v_ctrl) noexcept -> bool override {
 
             // Hook-side size checks (gain vector + joint-space target).

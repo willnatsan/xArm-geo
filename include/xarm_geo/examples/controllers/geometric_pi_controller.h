@@ -38,19 +38,19 @@ namespace xarm_geo::controllers {
 
         // --- Public Configuration ---
         SE3TrackingGains gains;
-        bool use_feedforward = true;
+        bool use_feedforward = true;  // Kinematic feedforward (Transported reference twist)
         Eigen::Vector3d sigma_lin =
             Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
         Eigen::Vector3d sigma_ang =
             Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
 
     protected:
-        auto compute_command_twist(const Model & /*model*/, Data &data,
+        auto compute_command_twist(const Model & /*model*/, Data & /*data*/, KinematicsCache &kin,
                                    const TaskControllerContext &ctx,
                                    manifold::SE3::Twist &cmd_twist) noexcept -> bool override {
 
             // Body-frame configuration error: g_e = g^{-1} * g_d.
-            const manifold::SE3 g_e = data.ee_pose.inverse() * ctx.ref.pose;
+            const manifold::SE3 g_e = kin.ee_pose().inverse() * ctx.ref.pose;
 
             // Hardcoded to Lie-group gradient (integrating log-map gradient is
             // unsafe near theta = pi due to branch-cut accumulation).
@@ -66,7 +66,7 @@ namespace xarm_geo::controllers {
             e_I_sat.head<3>() = e_I_.head<3>().cwiseMax(-sigma_lin).cwiseMin(sigma_lin);
             e_I_sat.tail<3>() = e_I_.tail<3>().cwiseMax(-sigma_ang).cwiseMin(sigma_ang);
 
-            // Integral wrench contribution (per-axis K_I).
+            // Integral twist contribution (per-axis K_I).
             manifold::SE3::Twist integral_term;
             integral_term.head<3>() = gains.ki_lin.cwiseProduct(e_I_sat.head<3>());
             integral_term.tail<3>() = gains.ki_ang.cwiseProduct(e_I_sat.tail<3>());
@@ -91,5 +91,6 @@ namespace xarm_geo::controllers {
 
     // --- Compile-Time Concept Verification ---
     static_assert(xarm_geo::KinematicTaskController<GeometricPIController>);
+    static_assert(xarm_geo::ResettableController<GeometricPIController>);
 
 }  // namespace xarm_geo::controllers

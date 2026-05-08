@@ -6,10 +6,13 @@
 
 #include <Eigen/Dense>
 
+#include <vector>
+
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/motion.h>
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/modelling/collision.h>
+#include <xarm_geo/modelling/dynamics.h>
 #include <xarm_geo/modelling/kinematics.h>
 #include <xarm_geo/modelling/optimal_kinematics.h>
 #include <xarm_geo/safety/asif.h>
@@ -25,23 +28,25 @@
 //     3. Refresh kinematics (always for task-space bases; gated for
 //        joint-space bases via refresh_kinematics).
 //     4. Refresh dynamics (gated for the dynamic bases via refresh_dynamics).
-//     5. Hook: compute_command_<X>(...).  <-- this is what the user writes.
-//     6. Post-processing:
+//     5. Construct KinematicsCache / DynamicsCache reflecting freshness (if needed).
+//     6. Hook: compute_command_<X>(...).  <-- this is what the user writes.
+//     7. Post-processing:
 //          - kinematic-task : route through (optimal_)inverse_diff_kinematics
 //          - dynamic-task   : project J_b^T F, then optional bias add,
 //                             then optional ASIF
 //          - kinematic-joint: optional direction-preserving rescale
 //          - dynamic-joint  : optional bias add, then optional ASIF
-//     7. Write to `out` exactly once at the end.
+//     8. Write to `out` exactly once at the end.
 //
-// On entry to the hook, the following Data members are guaranteed fresh:
-//   - data.q                                       (always)
-//   - data.ee_pose, data.body_jacobian, ...        (if refresh_kinematics)
-//   - data.M                                       (if refresh_dynamics)
-//   - data.h                                       (if refresh_dynamics)
-// All other Data members may be stale; the hook may freely overwrite any of
-// them, and may itself call compute_mass_matrix / compute_bias_forces /
-// compute_jacobians as needed.
+// Hook-side access pattern:
+//   - data.q is canonical and always fresh.
+//   - Kinematic state (Jacobians, EE pose, ...) is read through the
+//     `KinematicsCache` argument: kin.body_jacobian(), kin.ee_pose(), ...
+//   - Dynamic state (M, h, g) is read through the `DynamicsCache` argument:
+//     dyn.M(), dyn.h(), dyn.g().
+//   - The hook should NOT read data.ee_pose / data.body_jacobian / data.M /
+//     data.h / data.g directly: the cache accessors are the canonical path
+//     and guarantee freshness without redundant work.
 
 // --- Customising the constraint / safety set ---
 //
@@ -68,9 +73,10 @@
 //                                                          kinematic-task with an
 //                                                          augmented Optimal IDK
 //                                                          task set)
-//
-// TODO (future): consider adding a protected virtual hook to customise the default
-// Optimal IDK and ASIF implementations.
+
+// TODO: the convenience overload of `asif_filter` recomputes `data.M` and
+// `data.h` even when the base has already populated them. Switch to the
+// composable overload to share the work.
 
 namespace xarm_geo {
 
@@ -94,14 +100,22 @@ namespace xarm_geo {
 
     // --- Controller Metadata ---
 
+    // Origin column legend:
+    //   - base   : produced by the *ControllerBase update() pipeline itself.
+    //   - hook   : produced by the user-supplied compute_command_* hook.
+    //   - OptIK  : forwarded from optimal_inverse_diff_kinematics
+    //              (only reachable from the kinematic-task base).
+    //   - ASIF   : forwarded from asif_filter
+    //              (only reachable from the dynamic-task and dynamic-joint bases).
+
     enum class ControllerStatus : std::uint8_t {
-        OK,
-        SIZE_MISMATCH,   // fb / out vector sizes != model.dof
-        NOT_CONFIGURED,  // constraint_aware = true but no collision attached
-        HOOK_FAILED,     // user-supplied hook returned non-OK
-        INFEASIBLE,      // optimal-IDK or ASIF reported INFEASIBLE
-        MAX_ITERS,       // optimal-IDK or ASIF reported MAX_ITERS
-        SOLVER_ERROR,    // optimal-IDK or ASIF reported ERROR
+        OK,              // origin: base / hook
+        SIZE_MISMATCH,   // origin: base   -- fb / out vector sizes != model.dof
+        NOT_CONFIGURED,  // origin: base   -- constraint_aware = true but no collision attached
+        HOOK_FAILED,     // origin: hook   -- user-supplied hook returned non-OK
+        INFEASIBLE,      // origin: OptIK or ASIF (mutually exclusive per base; see legend)
+        MAX_ITERS,       // origin: OptIK or ASIF (mutually exclusive per base; see legend)
+        SOLVER_ERROR,    // origin: OptIK or ASIF (mutually exclusive per base; see legend)
     };
 
     // --- Solver Status Mapping (Helper Functions)
@@ -150,6 +164,113 @@ namespace xarm_geo {
         std::chrono::nanoseconds dt;
     };
 
+    // --- KinematicsCache (Hook-Side Lazy Accessor for Kinematics State) ---
+    //
+    // Passed by reference into kinematic-controller hooks. Wraps `data` and
+    // exposes lazy accessors for the kinematic fields (Jacobians, EE pose,
+    // pose tree). On first access, computes and caches; subsequent calls in
+    // the same tick are free.
+    //
+    // Inside a hook, read kinematic state through this cache rather than
+    // touching `data` directly: this guarantees freshness without redundant
+    // work and is robust to future changes in the base's refresh policy.
+
+    class KinematicsCache {
+    public:
+        KinematicsCache(const Model &model, Data &data, bool kin_fresh) noexcept
+            : model_(model), data_(data), kin_fresh_(kin_fresh) {}
+
+        // Refresh the full kinematic state (pose tree, EE pose, Jacobians).
+        auto refresh() -> void {
+            if (!kin_fresh_) {
+                compute_jacobians(model_, data_);
+                kin_fresh_ = true;
+            }
+        }
+
+        [[nodiscard]] auto ee_pose() -> const manifold::SE3 & {
+            refresh();
+            return data_.ee_pose;
+        }
+        [[nodiscard]] auto body_jacobian() -> const manifold::SE3::Jacobian & {
+            refresh();
+            return data_.body_jacobian;
+        }
+        [[nodiscard]] auto space_jacobian() -> const manifold::SE3::Jacobian & {
+            refresh();
+            return data_.space_jacobian;
+        }
+        [[nodiscard]] auto frame_jacobian() -> const manifold::SE3::Jacobian & {
+            refresh();
+            return data_.frame_jacobian;
+        }
+        [[nodiscard]] auto pose_tree() -> const std::vector<manifold::SE3> & {
+            refresh();
+            return data_.pose_tree;
+        }
+        [[nodiscard]] auto pose_tree_local() -> const std::vector<manifold::SE3> & {
+            refresh();
+            return data_.pose_tree_local;
+        }
+
+    private:
+        const Model &model_;
+        Data &data_;
+        bool kin_fresh_;
+    };
+
+    // --- DynamicsCache (Hook-Side Lazy Accessor for Dynamics State) ---
+    //
+    // Passed by reference into dynamic-controller hooks. Wraps `data` and
+    // exposes lazy accessors for the joint-space mass matrix M, the full
+    // bias forces h = C(q,v)v + g(q), and the gravity-only bias g. On first
+    // access, computes and caches; subsequent calls in the same tick are free.
+    //
+    // Note: g(q) is also computed implicitly when h is recomputed via RNEA;
+    // however this cache treats them independently because the eager-refresh
+    // path differs (refresh_dynamics populates `data.h` but only populates
+    // `data.g` when the bias_compensation policy explicitly asks for it).
+
+    class DynamicsCache {
+    public:
+        DynamicsCache(const Model &model, Data &data, const Eigen::VectorXd &v, bool m_fresh,
+                      bool h_fresh, bool g_fresh) noexcept
+            : model_(model), data_(data), v_(v), m_fresh_(m_fresh), h_fresh_(h_fresh),
+              g_fresh_(g_fresh) {}
+
+        [[nodiscard]] auto M() -> const Eigen::MatrixXd & {
+            if (!m_fresh_) {
+                compute_mass_matrix(model_, data_);
+                m_fresh_ = true;
+            }
+            return data_.M;
+        }
+
+        [[nodiscard]] auto h() -> const Eigen::VectorXd & {
+            if (!h_fresh_) {
+                compute_bias_forces(model_, data_, v_);
+                h_fresh_ = true;
+            }
+            return data_.h;
+        }
+
+        [[nodiscard]] auto g() -> const Eigen::VectorXd & {
+            if (!g_fresh_) {
+                compute_gravity_forces(model_, data_);
+                g_fresh_ = true;
+            }
+            return data_.g;
+        }
+
+    private:
+        const Model &model_;
+        Data &data_;
+        const Eigen::VectorXd &v_;
+        bool m_fresh_;
+        bool h_fresh_;
+        bool g_fresh_;
+    };
+
     // --- Abstract Base: KinematicTaskControllerBase ---
     //
     // SE(3)-tracking velocity-mode controllers.
@@ -184,11 +305,7 @@ namespace xarm_geo {
         OptimalIKOptions optimal_ik_options;
 
     protected:
-        // Hook contract:
-        //   - data.q has been set to ctx.fb.q.
-        //   - compute_jacobians has been called: data.ee_pose,
-        //     data.body_jacobian, data.space_jacobian, ... are fresh.
-        virtual auto compute_command_twist(const Model &model, Data &data,
+        virtual auto compute_command_twist(const Model &model, Data &data, KinematicsCache &kin,
                                            const TaskControllerContext &ctx,
                                            manifold::SE3::Twist &cmd_twist) noexcept -> bool = 0;
 
@@ -244,12 +361,8 @@ namespace xarm_geo {
         ASIFOptions asif_options;
 
     protected:
-        // Hook contract: see refresh policy above. data.body_jacobian is
-        // always fresh; data.M is fresh iff refresh_dynamics; data.h is
-        // fresh iff refresh_dynamics OR bias_compensation == Full; data.g
-        // is fresh iff refresh_dynamics OR bias_compensation == GravityOnly.
-        virtual auto compute_command_wrench(const Model &model, Data &data,
-                                            const TaskControllerContext &ctx,
+        virtual auto compute_command_wrench(const Model &model, Data &data, KinematicsCache &kin,
+                                            DynamicsCache &dyn, const TaskControllerContext &ctx,
                                             manifold::SE3::Wrench &cmd_wrench) noexcept -> bool = 0;
 
         const CollisionModel *col_model_ = nullptr;
@@ -294,10 +407,7 @@ namespace xarm_geo {
         bool refresh_kinematics = false;  // call compute_jacobians before the hook
 
     protected:
-        // Hook contract:
-        //   - data.q has been set to ctx.fb.q.
-        //   - Kinematics fresh iff refresh_kinematics; M, h always stale.
-        virtual auto compute_command_velocity(const Model &model, Data &data,
+        virtual auto compute_command_velocity(const Model &model, Data &data, KinematicsCache &kin,
                                               const JointControllerContext &ctx,
                                               JointVelocity &v_ctrl) noexcept -> bool = 0;
 
@@ -350,12 +460,8 @@ namespace xarm_geo {
         ASIFOptions asif_options;
 
     protected:
-        // Hook contract: see KinematicJointControllerBase + dynamics. data.M
-        // is fresh iff refresh_dynamics; data.h is fresh iff
-        // refresh_dynamics OR bias_compensation == Full; data.g is fresh
-        // iff refresh_dynamics OR bias_compensation == GravityOnly.
-        virtual auto compute_command_torque(const Model &model, Data &data,
-                                            const JointControllerContext &ctx,
+        virtual auto compute_command_torque(const Model &model, Data &data, KinematicsCache &kin,
+                                            DynamicsCache &dyn, const JointControllerContext &ctx,
                                             JointTorque &tau_ctrl) noexcept -> bool = 0;
 
         const CollisionModel *col_model_ = nullptr;
@@ -374,6 +480,10 @@ namespace xarm_geo {
     //
     // Recommended usage: write controllers as subclasses; use these concepts
     // when authoring generic library code that takes "any controller of category X".
+    //
+    // Scope of the check: these concepts verify the *signature* of update()
+    // (and the inheritance shortcut), not behavioural correctness. Satisfying the
+    // concept is necessary but not sufficient; the doc-blocks are the source of truth.
 
     template <typename T>
     concept KinematicTaskController =
@@ -408,5 +518,18 @@ namespace xarm_geo {
                                              c.update(m, d, ctx, out)
                                          } noexcept -> std::same_as<ControllerStatus>;
                                      };
+
+    // --- Optional Capability Concepts ---
+    //
+    // Opt-in concepts that controller authors can satisfy to advertise
+    // additional capabilities to harness / runtime code. None of these are
+    // required by the four base classes; they are pure capability tags.
+
+    // ResettableController : the controller carries internal state (e.g. an integrator)
+    //                        that must be zeroed between distinct trajectories.
+    template <typename T>
+    concept ResettableController = requires(T &c) {
+        { c.reset() } noexcept -> std::same_as<void>;
+    };
 
 }  // namespace xarm_geo

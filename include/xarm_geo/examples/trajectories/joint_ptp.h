@@ -35,7 +35,7 @@ namespace xarm_geo::trajectories {
             for (auto &val : delta_q_) { val = manifold::wrap_to_pi(val); }
         }
 
-        [[nodiscard]] auto evaluate(double t, JointSpaceTarget &target) const -> TrajectoryStatus {
+        [[nodiscard]] auto evaluate(double t, JointTarget &target) const -> TrajectoryStatus {
             if (target.q.size() != q_start_.size() || target.v.size() != q_start_.size() ||
                 target.a.size() != q_start_.size()) {
                 return TrajectoryStatus::ERROR;
@@ -76,6 +76,6 @@ namespace xarm_geo::trajectories {
     };
 
     // --- Compile-Time Concept Verification ---
-    static_assert(JointSpaceTrajectory<JointPTP>);
+    static_assert(JointTrajectory<JointPTP>);
 
 }  // namespace xarm_geo::trajectories

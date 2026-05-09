@@ -1,7 +1,6 @@
 #include <cassert>
 
 #include <xarm_geo/control/controller.h>
-#include <xarm_geo/modelling/dynamics.h>
 #include <xarm_geo/utils/debug.h>
 
 namespace xarm_geo {
@@ -100,32 +99,15 @@ namespace xarm_geo {
         // Sync canonical state
         data.q = ctx.fb.q;
 
-        // Mandatory kinematics refresh: populate data.body_jacobian, data.ee_pose, etc.
-        // Note: Mandatory, as updated kinematics are always required (task-space -> joint-space)
+        // Mandatory kinematics refresh: always required for task-space -> joint-space routing.
         compute_jacobians(model, data);
 
-        // Optional dynamics refresh: populate data.M, data.h, and data.g
-        // before the hook so the user's control law can read them directly via `dyn`.
-        //
-        // data.g is only refreshed when the policy is GravityOnly to avoid
-        // a redundant RNEA pass for Full / None.
-        bool m_fresh = false;
-        bool h_fresh = false;
-        bool g_fresh = false;
-        if (refresh_dynamics) {
-            compute_mass_matrix(model, data);
-            compute_bias_forces(model, data, ctx.fb.v);
-            m_fresh = true;
-            h_fresh = true;
-            if (bias_compensation == BiasCompensation::GravityOnly) {
-                compute_gravity_forces(model, data);
-                g_fresh = true;
-            }
-        }
-
-        // Construct hook-side caches.
+        // Construct hook-side caches; kinematics already fresh; dynamics is always lazy
+        // (first cache access trigger the relevant RNEA / CRBA pass if not already
+        // populated by a prior access).
         KinematicsCache kin(model, data, /*kin_fresh=*/true);
-        DynamicsCache dyn(model, data, ctx.fb.v, m_fresh, h_fresh, g_fresh);
+        DynamicsCache dyn(model, data, ctx.fb.v, /*m_fresh=*/false, /*h_fresh=*/false,
+                          /*g_fresh=*/false);
 
         // Derived class produces the body-frame end-effector wrench.
         manifold::SE3::Wrench cmd_wrench;
@@ -190,11 +172,10 @@ namespace xarm_geo {
 
         // Sync canonical state.
         data.q = ctx.fb.q;
-        if (refresh_kinematics) { compute_jacobians(model, data); }
 
-        // Construct hook-side cache; lazy-refreshes on first access if the
-        // eager refresh above was skipped.
-        KinematicsCache kin(model, data, /*kin_fresh=*/refresh_kinematics);
+        // Construct hook-side cache; kinematics is lazy
+        // (compute_jacobians runs on first access if the hook needs kinematic state).
+        KinematicsCache kin(model, data, /*kin_fresh=*/false);
 
         if (!compute_command_velocity(model, data, kin, ctx, v_ctrl_)) {
             return ControllerStatus::HOOK_FAILED;
@@ -252,31 +233,11 @@ namespace xarm_geo {
         // Sync canonical state.
         data.q = ctx.fb.q;
 
-        // Optional kinematics refresh: populate data.body_jacobian, data.ee_pose, etc.
-        if (refresh_kinematics) { compute_jacobians(model, data); }
-
-        // Optional dynamics refresh: populate data.M, data.h, and data.g
-        // before the hook so the user's control law can read them directly via `dyn`.
-        //
-        // data.g is only refreshed when the policy is GravityOnly to avoid
-        // a redundant RNEA pass for Full / None.
-        bool m_fresh = false;
-        bool h_fresh = false;
-        bool g_fresh = false;
-        if (refresh_dynamics) {
-            compute_mass_matrix(model, data);
-            compute_bias_forces(model, data, ctx.fb.v);
-            m_fresh = true;
-            h_fresh = true;
-            if (bias_compensation == BiasCompensation::GravityOnly) {
-                compute_gravity_forces(model, data);
-                g_fresh = true;
-            }
-        }
-
-        // Construct hook-side caches; lazy-refresh on first access if eager refresh skipped.
-        KinematicsCache kin(model, data, /*kin_fresh=*/refresh_kinematics);
-        DynamicsCache dyn(model, data, ctx.fb.v, m_fresh, h_fresh, g_fresh);
+        // Construct hook-side caches; both kinematics and dynamics are lazy
+        // (first cache access triggers the relevant computation if needed).
+        KinematicsCache kin(model, data, /*kin_fresh=*/false);
+        DynamicsCache dyn(model, data, ctx.fb.v, /*m_fresh=*/false, /*h_fresh=*/false,
+                          /*g_fresh=*/false);
 
         if (!compute_command_torque(model, data, kin, dyn, ctx, tau_ctrl_)) {
             return ControllerStatus::HOOK_FAILED;

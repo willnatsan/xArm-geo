@@ -3,10 +3,9 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
+#include <vector>
 
 #include <Eigen/Dense>
-
-#include <vector>
 
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/motion.h>
@@ -25,18 +24,17 @@
 //   update(model, data, ctx, out)
 //     1. Size checks.
 //     2. data.q <- ctx.fb.q.
-//     3. Refresh kinematics (always for task-space bases; gated for
-//        joint-space bases via refresh_kinematics).
-//     4. Refresh dynamics (gated for the dynamic bases via refresh_dynamics).
-//     5. Construct KinematicsCache / DynamicsCache reflecting freshness (if needed).
-//     6. Hook: compute_command_<X>(...).  <-- this is what the user writes.
-//     7. Post-processing:
+//     3. Refresh kinematics (eager on task-space bases; lazy on joint-space bases)
+//        Note: dynamics always lazy
+//     4. Construct KinematicsCache / DynamicsCache
+//     5. Hook: compute_command_<X>(...).  <-- this is what the user writes.
+//     6. Post-processing:
 //          - kinematic-task : route through (optimal_)inverse_diff_kinematics
 //          - dynamic-task   : project J_b^T F, then optional bias add,
 //                             then optional ASIF
 //          - kinematic-joint: optional direction-preserving rescale
 //          - dynamic-joint  : optional bias add, then optional ASIF
-//     8. Write to `out` exactly once at the end.
+//     7. Write to `out` exactly once at the end.
 //
 // Hook-side access pattern:
 //   - data.q is canonical and always fresh.
@@ -69,10 +67,7 @@
 // relevant *Controller concept (defined at the bottom of this file).
 //
 // Worked Example:
-//   - xarm_geo/examples/controllers/custom_controller.h   (PostureBiasedPController:
-//                                                          kinematic-task with an
-//                                                          augmented Optimal IDK
-//                                                          task set)
+//   - xarm_geo/examples/controllers/custom_controller.h   (PostureBiasedPController)
 
 // TODO: the convenience overload of `asif_filter` recomputes `data.M` and
 // `data.h` even when the base has already populated them. Switch to the
@@ -154,13 +149,13 @@ namespace xarm_geo {
 
     struct TaskControllerContext {
         const JointState &fb;
-        const TaskSpaceTarget &ref;
+        const TaskTarget &ref;
         std::chrono::nanoseconds dt;
     };
 
     struct JointControllerContext {
         const JointState &fb;
-        const JointSpaceTarget &ref;
+        const JointTarget &ref;
         std::chrono::nanoseconds dt;
     };
 
@@ -225,11 +220,6 @@ namespace xarm_geo {
     // exposes lazy accessors for the joint-space mass matrix M, the full
     // bias forces h = C(q,v)v + g(q), and the gravity-only bias g. On first
     // access, computes and caches; subsequent calls in the same tick are free.
-    //
-    // Note: g(q) is also computed implicitly when h is recomputed via RNEA;
-    // however this cache treats them independently because the eager-refresh
-    // path differs (refresh_dynamics populates `data.h` but only populates
-    // `data.g` when the bias_compensation policy explicitly asks for it).
 
     class DynamicsCache {
     public:
@@ -319,13 +309,9 @@ namespace xarm_geo {
     //
     // Refresh policy:
     //   - kinematics : always (compute_jacobians is unconditional).
-    //   - dynamics   : gated by refresh_dynamics (default false). When
-    //                  enabled, the base populates data.M and data.h up
-    //                  front; data.g is populated up front iff the user's
-    //                  bias_compensation policy is GravityOnly.
+    //   - dynamics   : lazy (M, h, g computed on first dyn.M() / dyn.h() / dyn.g() access).
     //
     // Public config:
-    //   - refresh_dynamics   (default false): see above.
     //   - bias_compensation  (default None): see `BiasCompensation` enum for semantics.
     //   - constraint_aware   (default false): apply ASIF to the resulting torque;
     //                                         requires attach_collision.
@@ -335,8 +321,8 @@ namespace xarm_geo {
     //   tau_ctrl = J_b^T * cmd_wrench
     //   switch (bias_compensation):
     //     None        -> tau_des = tau_ctrl
-    //     GravityOnly -> tau_des = tau_ctrl + data.g
-    //     Full        -> tau_des = tau_ctrl + data.h
+    //     GravityOnly -> tau_des = tau_ctrl + g(q)
+    //     Full        -> tau_des = tau_ctrl + h(q, v)
     //   out.tau  = constraint_aware ? asif_filter(tau_des) : tau_des
     //
     // Note: derived classes should NOT redefine update(); override only the
@@ -356,7 +342,6 @@ namespace xarm_geo {
         // --- Public Configuration ---
 
         BiasCompensation bias_compensation = BiasCompensation::None;
-        bool refresh_dynamics = false;
         bool constraint_aware = false;
         ASIFOptions asif_options;
 
@@ -382,14 +367,12 @@ namespace xarm_geo {
     // Joint-space velocity-mode controllers.
     //
     // Refresh policy:
-    //   - kinematics : gated by refresh_kinematics (default false).
+    //   - kinematics : lazy (compute_jacobians runs on first kin.X() access).
     //   - dynamics   : never.
     //
     // Public config:
-    //   - constraint_aware    (default false): direction-preserving rescale
-    //                         so |v_i| <= model.limits[i].q_vel_max.
-    //   - refresh_kinematics  (default false): call compute_jacobians before
-    //                         the hook (some hooks read ee-side info).
+    //   - constraint_aware (default false): direction-preserving rescale
+    //                      so |v_i| <= model.limits[i].q_vel_max.
     //
     // Pipeline (after hook):
     //   out.v = constraint_aware ? rescale(v_ctrl) : v_ctrl
@@ -404,7 +387,6 @@ namespace xarm_geo {
 
         // --- Public Configuration ---
         bool constraint_aware = false;
-        bool refresh_kinematics = false;  // call compute_jacobians before the hook
 
     protected:
         virtual auto compute_command_velocity(const Model &model, Data &data, KinematicsCache &kin,
@@ -421,15 +403,10 @@ namespace xarm_geo {
     // Joint-space torque-mode controllers.
     //
     // Refresh policy:
-    //   - kinematics : gated by refresh_kinematics (default false).
-    //   - dynamics   : gated by refresh_dynamics  (default false). When
-    //                  enabled, the base populates data.M and data.h up
-    //                  front; data.g is populated up front iff the user's
-    //                  bias_compensation policy is GravityOnly.
+    //   - kinematics : lazy (compute_jacobians runs on first kin.X() access).
+    //   - dynamics   : lazy (M, h, g computed on first dyn.M() / dyn.h() / dyn.g() access).
     //
     // Public config:
-    //   - refresh_kinematics (default false).
-    //   - refresh_dynamics   (default false).
     //   - bias_compensation  (default None): see `BiasCompensation` enum for semantics.
     //   - constraint_aware   (default false): apply ASIF; requires attach_collision.
     //   - asif_options.
@@ -437,8 +414,8 @@ namespace xarm_geo {
     // Pipeline (after hook):
     //   switch (bias_compensation):
     //     None        -> tau_des = tau_ctrl
-    //     GravityOnly -> tau_des = tau_ctrl + data.g
-    //     Full        -> tau_des = tau_ctrl + data.h
+    //     GravityOnly -> tau_des = tau_ctrl + g(q)
+    //     Full        -> tau_des = tau_ctrl + h(q, v)
     //   out.tau = constraint_aware ? asif_filter(tau_des) : tau_des
 
     class DynamicJointControllerBase {
@@ -454,8 +431,6 @@ namespace xarm_geo {
 
         // --- Public Configuration ---
         BiasCompensation bias_compensation = BiasCompensation::None;
-        bool refresh_kinematics = false;
-        bool refresh_dynamics = false;
         bool constraint_aware = false;
         ASIFOptions asif_options;
 
@@ -524,12 +499,23 @@ namespace xarm_geo {
     // Opt-in concepts that controller authors can satisfy to advertise
     // additional capabilities to harness / runtime code. None of these are
     // required by the four base classes; they are pure capability tags.
+    //
+    // ResettableController : the controller carries internal state (e.g. an
+    //   integrator) that must be zeroed between distinct trajectories.
+    //
+    // ConvergenceObservable : the controller exposes a converged() predicate
+    //   reporting whether the control error has settled below a threshold for
+    //   min_consecutive consecutive ticks. Useful for setpoint regulation
+    //   ("have we arrived?") and for tracking ("has tracking error settled?").
 
-    // ResettableController : the controller carries internal state (e.g. an integrator)
-    //                        that must be zeroed between distinct trajectories.
     template <typename T>
     concept ResettableController = requires(T &c) {
         { c.reset() } noexcept -> std::same_as<void>;
+    };
+
+    template <typename T>
+    concept ConvergenceObservable = requires(const T &c) {
+        { c.converged() } noexcept -> std::same_as<bool>;
     };
 
 }  // namespace xarm_geo

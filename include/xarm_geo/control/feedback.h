@@ -8,11 +8,9 @@
 
 namespace xarm_geo {
 
-    // --- SE(3) Tracking Gains ---
-    //
-    // Per-axis diagonal gains (body-frame). Defaults are zero -- a
-    // default-constructed SE3TrackingGains yields a no-op controller; users
-    // must set gains explicitly. Empty defaults surface mistuning loudly.
+    // --- Tracking Gains ---
+    // Defaults are zero -> users must set gains explicitly.
+    // Empty defaults surface mistuning loudly.
 
     struct SE3TrackingGains {
         Eigen::Vector3d kp_pos = Eigen::Vector3d::Zero();  // K_p (linear, body frame)
@@ -23,24 +21,23 @@ namespace xarm_geo {
         Eigen::Vector3d ki_ang = Eigen::Vector3d::Zero();  // K_I angular (PI/PID only)
     };
 
-    // --- SE(3) Tracking Gradient Selector ---
+    // --- Error Gradient Selector ---
     //
-    // Selects which gradient flavour a geometric controller uses. The two
-    // helpers below (`se3_lie_group_gradient`, `se3_lie_algebra_gradient`)
-    // implement the corresponding maps; this enum is the convenience tag a
-    // controller exposes to switch between them.
+    // Selects which gradient flavour a geometric controller uses. The helpers below
+    // (`*_lie_group_gradient`, `*_lie_algebra_gradient`) implement the corresponding maps;
+    // this enum is the convenience tag a controller exposes to switch between them.
     //
-    //   LieGroup   : Smooth function (via trace function) -> Almost Global Stability
-    //   LieAlgebra : Discontinuous function (via log-map) -> Global Stability
+    //   LieGroup   : smooth gradient function (via trace operation) -> Almost Global Stability
+    //   LieAlgebra : discontinuous gradient function (via logarithmic map) -> Global Stability
 
     enum class GradientType : std::uint8_t { LieGroup, LieAlgebra };
 
-    // --- SE(3) Tracking: Free-Function Building Blocks ---
+    // --- SE(3) Feedback: Free-Function Building Blocks ---
     //
-    // Body-frame primitives for SE(3) tracking controllers. These helpers are
-    // pure functions: stateless, allocation-free, and independent of `Model`
-    // / `Data`. Reusable in any controller variant (P, PD, PID, MPC,
-    // impedance, ...).
+    // Body-frame primitives for SE(3) feedback controllers (tracking and
+    // setpoint regulation). These helpers are pure functions: stateless,
+    // allocation-free, and independent of `Model` / `Data`. Reusable in
+    // any controller variant (P, PD, PID, MPC, impedance, ...).
     //
     // Frame conventions (consistent with the rest of the library):
     //   - g_e = g^{-1} * g_d         (body-frame configuration error;
@@ -101,9 +98,7 @@ namespace xarm_geo {
     // We take xi_e to avoid re-passing xi (already consumed by the K_D term
     // in the dynamic PD law). `ad_xi_d` is the cached value of Ad_{g_e} *
     // xi_d (avoids recomputing). `spatial_acc_body` is the reference
-    // body-frame spatial acceleration (= d/dt(xi_d), as written by every
-    // TaskSpaceTrajectory in xarm_geo/examples/trajectories/*.h via
-    // smooth's BSpline analytical derivative).
+    // body-frame spatial acceleration (= d/dt(xi_d).
     [[nodiscard]] auto
     se3_transported_acc(const manifold::SE3 &g_e, const manifold::SE3::Twist &xi_e,
                         const manifold::SE3::Twist &ad_xi_d,

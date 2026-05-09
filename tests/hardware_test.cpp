@@ -48,8 +48,8 @@ namespace {
 
     // --- Phase Runners ---
 
-    // Joint-PTP execution loop. Drives a JointPController against the JointSpaceTrajectory.
-    template <xarm_geo::JointSpaceTrajectory T>
+    // Joint-PTP execution loop. Drives a JointPController against a JointTrajectory.
+    template <xarm_geo::JointTrajectory T>
     auto run_joint_ptp_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
                           xarm_geo::Data &data, xarm_geo::controllers::JointPController &controller,
                           const T &traj, double duration, xarm_geo::JointState &state,
@@ -59,7 +59,7 @@ namespace {
         const auto dt_ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(dt));
 
-        xarm_geo::JointSpaceTarget target(model.dof);
+        xarm_geo::JointTarget target(model.dof);
         auto next_tick = std::chrono::steady_clock::now();
 
         for (double t = 0.0; t < duration && hw.is_running(); t += dt) {
@@ -81,8 +81,8 @@ namespace {
         return true;
     }
 
-    // Task-space execution loop. Drives a GeometricPController against the TaskSpaceTrajectory.
-    template <xarm_geo::TaskSpaceTrajectory T>
+    // Task-space execution loop. Drives a GeometricPController against a TaskTrajectory.
+    template <xarm_geo::TaskTrajectory T>
     auto run_task_space_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
                            xarm_geo::Data &data,
                            xarm_geo::controllers::GeometricPController &controller, const T &traj,
@@ -93,7 +93,7 @@ namespace {
         const auto dt_ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(dt));
 
-        xarm_geo::TaskSpaceTarget target;
+        xarm_geo::TaskTarget target;
         auto next_tick = std::chrono::steady_clock::now();
 
         for (double t = 0.0; t < duration && hw.is_running(); t += dt) {
@@ -156,7 +156,7 @@ int main(int argc, char *argv[]) {
         xarm_geo::trajectories::TiltingCircle circle_traj(anchor, circle_duration);
 
         // --- Pre-Flight: Find a Collision-Free Start Pose ---
-        xarm_geo::TaskSpaceTarget start_target;
+        xarm_geo::TaskTarget start_target;
         if (circle_traj.evaluate(0.0, start_target) != xarm_geo::TrajectoryStatus::OK) {
             std::cerr << "[ABORT] Failed to Evaluate Start Pose\n";
             return 1;

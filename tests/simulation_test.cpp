@@ -45,7 +45,7 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::Model &model, xarm
     const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(physics_dt));
 
-    xarm_geo::JointSpaceTarget joint_target(state.q.size());
+    xarm_geo::JointTarget joint_target(state.q.size());
 
     while (t < duration && sim.is_running()) {
         if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { return false; }
@@ -82,7 +82,7 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::Model &model, xarm
     return true;
 }
 
-template <xarm_geo::TaskSpaceTrajectory T>
+template <xarm_geo::TaskTrajectory T>
 auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
                     xarm_geo::CollisionModel &col_model, xarm_geo::CollisionData &col_data,
                     xarm_geo::Simulation &sim, const T &trajectory, double duration,
@@ -93,7 +93,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { return 1; }
 
-    xarm_geo::TaskSpaceTarget task_target;
+    xarm_geo::TaskTarget task_target;
     if (trajectory.evaluate(0.0, task_target) != xarm_geo::TrajectoryStatus::OK) { return 1; }
 
     // --- Layer 1: Collision-Aware IK for Start Pose ---

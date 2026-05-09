@@ -132,7 +132,7 @@ set(LIB_SOURCES
         src/safety/tasks.cpp
         src/control/admittance.cpp
         src/control/controller.cpp
-        src/control/tracking.cpp
+        src/control/feedback.cpp
         src/utils/model_builder.cpp
         src/utils/model_config.cpp
         src/utils/parsing_utils.cpp

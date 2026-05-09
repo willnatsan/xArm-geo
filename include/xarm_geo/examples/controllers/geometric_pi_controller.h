@@ -7,7 +7,7 @@
 #include <Eigen/Dense>
 
 #include <xarm_geo/control/controller.h>
-#include <xarm_geo/control/tracking.h>
+#include <xarm_geo/control/feedback.h>
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/system.h>
 

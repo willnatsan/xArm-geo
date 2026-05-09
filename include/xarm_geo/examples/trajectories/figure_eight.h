@@ -50,7 +50,7 @@ namespace xarm_geo::trajectories {
             spline_ = build_se3_spline<5>(waypoints, duration);
         }
 
-        [[nodiscard]] auto evaluate(double t, TaskSpaceTarget &target) const -> TrajectoryStatus {
+        [[nodiscard]] auto evaluate(double t, TaskTarget &target) const -> TrajectoryStatus {
             manifold::SE3::Tangent vel;
             manifold::SE3::Tangent acc;
 
@@ -67,6 +67,6 @@ namespace xarm_geo::trajectories {
     };
 
     // --- Compile-Time Concept Verification ---
-    static_assert(TaskSpaceTrajectory<FigureEight>);
+    static_assert(TaskTrajectory<FigureEight>);
 
 }  // namespace xarm_geo::trajectories

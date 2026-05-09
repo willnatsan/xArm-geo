@@ -33,7 +33,7 @@ namespace xarm_geo::controllers {
         }
 
         // --- Public Configuration ---
-        SE3TrackingGains gains;
+        SE3FeedbackGains gains;
         bool use_feedforward = true;  // Kinematic feedforward (Transported reference twist)
         GradientType gradient = GradientType::LieGroup;
 

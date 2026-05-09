@@ -37,7 +37,7 @@ namespace xarm_geo::controllers {
         void reset() noexcept { e_I_.setZero(); }
 
         // --- Public Configuration ---
-        SE3TrackingGains gains;
+        SE3FeedbackGains gains;
         bool use_feedforward = true;  // Kinematic feedforward (Transported reference twist)
         Eigen::Vector3d sigma_lin =
             Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());

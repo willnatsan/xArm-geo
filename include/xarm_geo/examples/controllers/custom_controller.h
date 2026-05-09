@@ -73,7 +73,7 @@ namespace xarm_geo::controllers {
         }
 
         // --- Public Configuration ---
-        SE3TrackingGains gains;       // Primary EE-tracking gains.
+        SE3FeedbackGains gains;       // Primary EE-tracking gains.
         bool use_feedforward = true;  // Include Ad * xi_d in cmd_twist.
         GradientType gradient = GradientType::LieGroup;
         Eigen::VectorXd posture_q_ref;                // Preferred joint configuration.

@@ -46,7 +46,7 @@ namespace xarm_geo::controllers {
         void reset() noexcept { e_I_.setZero(); }
 
         // --- Public Configuration ---
-        SE3TrackingGains gains;
+        SE3FeedbackGains gains;
         bool use_feedforward = true;  // Operational-space inertial feedforward
         double c2 = 0.0;              // mixed-state coupling (Goodarzi); set > 0 to enable mixing
         Eigen::Vector3d sigma_lin =

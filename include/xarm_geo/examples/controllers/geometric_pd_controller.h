@@ -45,7 +45,7 @@ namespace xarm_geo::controllers {
         }
 
         // --- Public Configuration ---
-        SE3TrackingGains gains;
+        SE3FeedbackGains gains;
         bool use_feedforward = true;  // Operational-space inertial feedforward
         GradientType gradient = GradientType::LieGroup;
 

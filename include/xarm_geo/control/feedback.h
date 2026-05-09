@@ -8,11 +8,11 @@
 
 namespace xarm_geo {
 
-    // --- Tracking Gains ---
+    // --- Feedback Gains (Convenience Structs) ---
     // Defaults are zero -> users must set gains explicitly.
     // Empty defaults surface mistuning loudly.
 
-    struct SE3TrackingGains {
+    struct SE3FeedbackGains {
         Eigen::Vector3d kp_pos = Eigen::Vector3d::Zero();  // K_p (linear, body frame)
         Eigen::Vector3d kp_rot = Eigen::Vector3d::Zero();  // K_R (angular, body frame)
         Eigen::Vector3d kd_lin = Eigen::Vector3d::Zero();  // K_D linear (PD/PID only)

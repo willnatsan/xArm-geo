@@ -43,7 +43,11 @@ namespace xarm_geo::controllers {
             // Reference twist transported into the current body frame.
             const manifold::SE3::Twist ad_xi_d = g_e.Ad() * ctx.ref.twist;
 
-            cmd_twist = use_feedforward ? (ad_xi_d - grad) : -grad;
+            if (use_feedforward) {
+                cmd_twist = ad_xi_d - grad;
+            } else {
+                cmd_twist = -grad;
+            }
             return true;
         }
     };

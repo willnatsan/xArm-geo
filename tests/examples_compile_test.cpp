@@ -16,6 +16,7 @@
 #include <xarm_geo/examples/trajectories/figure_eight.h>
 #include <xarm_geo/examples/trajectories/inner_cavity_scan.h>
 #include <xarm_geo/examples/trajectories/joint_ptp.h>
+#include <xarm_geo/examples/trajectories/large_orientation_step.h>
 #include <xarm_geo/examples/trajectories/pipe_inspection.h>
 #include <xarm_geo/examples/trajectories/tilting_circle.h>
 #include <xarm_geo/examples/trajectories/waypoint.h>

@@ -47,8 +47,7 @@ namespace xarm_geo {
     // --- Task-Space Trajectory ---
     //
     // Spatial quantities (twist, spatial_acc) are in the end-effector body frame.
-    // Setpoint / infinite-duration trajectories should return +infinity from
-    // duration().
+    // Setpoint / infinite-duration trajectories should return +infinity from duration().
 
     struct TaskTarget {
         manifold::SE3 pose;

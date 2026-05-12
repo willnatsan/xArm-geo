@@ -42,7 +42,11 @@ namespace xarm_geo::controllers {
             }
 
             const Eigen::VectorXd p_term = kp.cwiseProduct(ctx.fb.q - ctx.ref.q);
-            v_ctrl.v.noalias() = use_feedforward ? (ctx.ref.v - p_term).eval() : (-p_term).eval();
+            if (use_feedforward) {
+                v_ctrl.v.noalias() = ctx.ref.v - p_term;
+            } else {
+                v_ctrl.v.noalias() = -p_term;
+            }
             return true;
         }
     };

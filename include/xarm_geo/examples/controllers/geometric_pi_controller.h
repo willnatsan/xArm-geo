@@ -64,8 +64,11 @@ namespace xarm_geo::controllers {
             integral_term.tail<3>() = gains.ki_ang.cwiseProduct(e_I_sat.tail<3>());
 
             const manifold::SE3::Twist ad_xi_d = g_e.Ad() * ctx.ref.twist;
-            cmd_twist =
-                use_feedforward ? (ad_xi_d - grad - integral_term) : (-grad - integral_term);
+            if (use_feedforward) {
+                cmd_twist = ad_xi_d - grad - integral_term;
+            } else {
+                cmd_twist = -grad - integral_term;
+            }
 
             return true;
         }

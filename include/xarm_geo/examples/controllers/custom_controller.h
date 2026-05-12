@@ -90,7 +90,12 @@ namespace xarm_geo::controllers {
                     ? se3_lie_algebra_gradient(g_e, gains.kp_pos, gains.kp_rot)
                     : se3_lie_group_gradient(g_e, gains.kp_pos, gains.kp_rot);
             const manifold::SE3::Twist ad_xi_d = g_e.Ad() * ctx.ref.twist;
-            const manifold::SE3::Twist cmd_twist = use_feedforward ? (ad_xi_d - grad) : -grad;
+            manifold::SE3::Twist cmd_twist;
+            if (use_feedforward) {
+                cmd_twist = ad_xi_d - grad;
+            } else {
+                cmd_twist = -grad;
+            }
 
             // --- Augmented Optimal IDK Task Set ---
             const double step_dt = (optimal_ik_options.dt > 0.0) ? optimal_ik_options.dt : 1.0;

@@ -149,12 +149,14 @@ namespace xarm_geo::diagnostics {
     //
     // Composes a self-describing trial filename stem from the controller class
     // name, trajectory class name, and active flags.  Example output:
-    //   "sim_GeometricPDController_PipeInspection_asif_ff"
+    //   "sim_GeometricPDController_PipeInspection_safe_ff"
     //
     // `backend`      : "sim" or "hardware".
     // `controller`   : controller::kName (or any string_view).
     // `trajectory`   : trajectory::kName (or any string_view).
-    // `constraint`   : true if ASIF or OptIK certification was active.
+    // `constraint`   : true if any safety routing layer was active (ASIF for
+    //                  dynamic controllers, OptIK or velocity rescale for
+    //                  kinematic controllers).
     // `feedforward`  : true if the controller's use_feedforward flag was on.
     // `suffix`       : optional extra tag appended after "_ff" / "_noff".
 

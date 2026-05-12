@@ -285,7 +285,7 @@ namespace xarm_geo::diagnostics {
         name += '_';
         name += trajectory;
 
-        if (constraint) { name += "_asif"; }
+        if (constraint) { name += "_safe"; }
         name += feedforward ? "_ff" : "_noff";
 
         if (!suffix.empty()) {

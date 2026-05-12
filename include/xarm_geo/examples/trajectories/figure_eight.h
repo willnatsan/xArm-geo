@@ -2,9 +2,7 @@
 
 #include <cmath>
 #include <numbers>
-#include <vector>
-
-#include <smooth/spline/bspline.hpp>
+#include <utility>
 
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/trajectory/trajectory.h>
@@ -19,51 +17,35 @@ namespace xarm_geo::trajectories {
     // point the tool downward). Sampled at 100 points and fitted to a
     // degree-5 B-spline for C^4 continuity.
 
-    class FigureEight {
+    class FigureEight final : public AnalyticTaskTrajectory {
     public:
         explicit FigureEight(const manifold::SE3 &anchor, double duration = 15.0,
                              double omega = 1.0, double size_x = 0.15, double size_y = 0.10,
-                             double size_z = 0.03) {
-
-            constexpr int num_samples = 100;
-            std::vector<manifold::SE3> waypoints;
-            waypoints.reserve(num_samples);
-
-            for (int i = 0; i < num_samples; ++i) {
-                const double t = (static_cast<double>(i) / (num_samples - 1)) * duration;
-
-                // Lissajous Figure-Eight Pattern in XY Plane with Sinusoidal Z-Variation.
-                const Eigen::Vector3d local_pos(size_x * std::sin(omega * t),
-                                                size_y * std::sin(2.0 * omega * t),
-                                                size_z * std::sin(omega * t));
-
-                // Time-Varying ZYX Euler Orientation: Oscillating Yaw/Pitch with Pi-Offset
-                // Roll to Point Tool Downward.
-                const double roll = std::numbers::pi + (0.3 * std::cos(omega * t));
-                const double pitch = 0.5 * std::sin(2.0 * omega * t);
-                const double yaw = 0.8 * std::sin(omega * t);
-                const manifold::SO3 local_rot = manifold::rpy_to_SO3(roll, pitch, yaw);
-
-                waypoints.emplace_back(anchor * manifold::SE3(local_rot, local_pos));
-            }
-
-            spline_ = build_se3_spline<5>(waypoints, duration);
+                             double size_z = 0.03)
+            : AnalyticTaskTrajectory(anchor, duration), omega_(omega), sx_(size_x), sy_(size_y),
+              sz_(size_z) {
+            build_spline();
         }
 
-        [[nodiscard]] auto evaluate(double t, TaskTarget &target) const -> TrajectoryStatus {
-            manifold::SE3::Tangent vel;
-            manifold::SE3::Tangent acc;
+    protected:
+        [[nodiscard]] auto sample(double t) const
+            -> std::pair<manifold::SO3, Eigen::Vector3d> override {
+            // Lissajous Figure-Eight Pattern in XY Plane with Sinusoidal Z-Variation.
+            const Eigen::Vector3d local_pos(sx_ * std::sin(omega_ * t),
+                                            sy_ * std::sin(2.0 * omega_ * t),
+                                            sz_ * std::sin(omega_ * t));
 
-            target.pose = spline_(t, smooth::OptTangent<manifold::SE3>{vel},
-                                  smooth::OptTangent<manifold::SE3>{acc});
-            target.twist = vel;
-            target.spatial_acc = acc;
+            // Time-Varying ZYX Euler Orientation: Oscillating Yaw/Pitch with Pi-Offset
+            // Roll to Point Tool Downward.
+            const double roll = std::numbers::pi + (0.3 * std::cos(omega_ * t));
+            const double pitch = 0.5 * std::sin(2.0 * omega_ * t);
+            const double yaw = 0.8 * std::sin(omega_ * t);
 
-            return TrajectoryStatus::OK;
+            return {manifold::rpy_to_SO3(roll, pitch, yaw), local_pos};
         }
 
     private:
-        manifold::SE3::Spline<5> spline_;
+        double omega_, sx_, sy_, sz_;
     };
 
     // --- Compile-Time Concept Verification ---

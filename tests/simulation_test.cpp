@@ -20,6 +20,7 @@
 #include <xarm_geo/interfaces/simulation.h>
 #include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/kinematics.h>
+#include <xarm_geo/trajectory/validate.h>
 #include <xarm_geo/utils/model_builder.h>
 
 struct TestParams {
@@ -35,9 +36,10 @@ struct TestParams {
 
 auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::Model &model, xarm_geo::Data &data,
                    xarm_geo::controllers::JointPController &joint_controller,
-                   const xarm_geo::trajectories::JointPTP &traj, double duration,
-                   xarm_geo::JointState &state, xarm_geo::JointVelocity &control_target) -> bool {
+                   const xarm_geo::trajectories::JointPTP &traj, xarm_geo::JointState &state,
+                   xarm_geo::JointVelocity &control_target) -> bool {
 
+    const double duration = traj.duration();
     double t = 0.0;
     double physics_dt = 0.002;
     double render_dt = 1.0 / 60.0;
@@ -46,7 +48,7 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::Model &model, xarm
     const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(physics_dt));
 
-    xarm_geo::JointTarget joint_target(state.q.size());
+    xarm_geo::JointTarget joint_target(traj.dof());
 
     while (t < duration && sim.is_running()) {
         if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { return false; }
@@ -86,8 +88,10 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::Model &model, xarm
 template <xarm_geo::TaskTrajectory T>
 auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
                     xarm_geo::CollisionModel &col_model, xarm_geo::CollisionData &col_data,
-                    xarm_geo::Simulation &sim, const T &trajectory, double duration,
-                    const Eigen::VectorXd &q_home, const TestParams &params) -> int {
+                    xarm_geo::Simulation &sim, const T &trajectory, const Eigen::VectorXd &q_home,
+                    const TestParams &params) -> int {
+
+    const double duration = trajectory.duration();
 
     xarm_geo::JointState state(model.dof);
     xarm_geo::JointVelocity control_target(model.dof);
@@ -107,14 +111,34 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     }
     Eigen::VectorXd q_start = data.q_out;
 
+    // --- Controller Setup ---
+    //
+    // Both the geometric and Euclidean variants are instantiated with
+    // IDENTICAL gain values, FF flag, and constraint-aware flag, so any
+    // difference observed in execution is attributable to the control law
+    // (Lie-group SE(3) vs world-frame Euler / RPY) rather than tuning.
+    //
+    // Recommended A/B runs:
+    //   --geometric true  vs --geometric false : isolates the control law.
+    //   ... combined with --torque {false|true}: isolates kinematic vs dynamic.
+    //   ... combined with --constraint_aware {false|true}: shared safety stack.
+
+    // Kinematic pair (JointVelocity).
+    xarm_geo::controllers::GeometricPController p_controller(model);
+    p_controller.gains.kp_pos.setConstant(8.0);
+    p_controller.gains.kp_rot.setConstant(8.0);
+    p_controller.use_feedforward = params.feedforward;
+    p_controller.constraint_aware = params.constraint_aware;
+    if (params.constraint_aware) { p_controller.attach_collision(col_model, col_data); }
+
     // --- Layer 2: Pre-Flight Trajectory Validation ---
 
     if (params.check_trajectory) {
         std::cout << "\n[PRE-FLIGHT] Validating Trajectory for Collision-Free Feasibility...\n";
 
         auto validation = xarm_geo::validate_trajectory(model, data, col_model, col_data,
-                                                        trajectory, duration, q_start);
-        if (!validation.valid) {
+                                                        trajectory, q_start, p_controller);
+        if (validation.status != xarm_geo::ValidationStatus::OK) {
             std::cerr << "Trajectory Validation FAILED at t=" << validation.failure_time << ": "
                       << validation.reason << "\n";
             return 1;
@@ -136,8 +160,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     std::cout << "\n[PHASE 1] Moving from Home to Trajectory Start...\n";
     xarm_geo::trajectories::JointPTP approach_traj(q_home, q_start, start_duration);
 
-    if (!run_joint_ptp(sim, model, data, joint_controller, approach_traj, start_duration, state,
-                       control_target)) {
+    if (!run_joint_ptp(sim, model, data, joint_controller, approach_traj, state, control_target)) {
         std::cerr << "Failed during Phase 1 Approach.\n";
         return 1;
     }
@@ -169,26 +192,6 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     double physics_dt = 0.002;
     double render_dt = 1.0 / 60.0;
     double last_render_t = 0.0;
-
-    // --- Controller Setup ---
-    //
-    // Both the geometric and Euclidean variants are instantiated with
-    // IDENTICAL gain values, FF flag, and constraint-aware flag, so any
-    // difference observed in execution is attributable to the control law
-    // (Lie-group SE(3) vs world-frame Euler / RPY) rather than tuning.
-    //
-    // Recommended A/B runs:
-    //   --geometric true  vs --geometric false : isolates the control law.
-    //   ... combined with --torque {false|true}: isolates kinematic vs dynamic.
-    //   ... combined with --constraint_aware {false|true}: shared safety stack.
-
-    // Kinematic pair (JointVelocity).
-    xarm_geo::controllers::GeometricPController p_controller(model);
-    p_controller.gains.kp_pos.setConstant(8.0);
-    p_controller.gains.kp_rot.setConstant(8.0);
-    p_controller.use_feedforward = params.feedforward;
-    p_controller.constraint_aware = params.constraint_aware;
-    if (params.constraint_aware) { p_controller.attach_collision(col_model, col_data); }
 
     xarm_geo::controllers::EuclideanPController p_baseline(model);
     p_baseline.gains.kp_pos.setConstant(8.0);
@@ -297,8 +300,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     }
 
     xarm_geo::trajectories::JointPTP return_traj(state.q, q_home, end_duration);
-    if (!run_joint_ptp(sim, model, data, joint_controller, return_traj, end_duration, state,
-                       control_target)) {
+    if (!run_joint_ptp(sim, model, data, joint_controller, return_traj, state, control_target)) {
         std::cerr << "Failed during Phase 3 Return.\n";
         return 1;
     }
@@ -405,31 +407,26 @@ auto main(int argc, char *argv[]) -> int {
 
     xarm_geo::manifold::SE3 anchor_pose(rot, center);
 
-    double traj_duration = 15.0;
+    constexpr double traj_duration = 15.0;
 
     if (params.trajectory_mode == 0) {
         xarm_geo::trajectories::FigureEight traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
-                              params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
     }
     if (params.trajectory_mode == 1) {
         xarm_geo::trajectories::WingInspection traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
-                              params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
     }
     if (params.trajectory_mode == 2) {
         xarm_geo::trajectories::PipeInspection traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
-                              params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
     }
     if (params.trajectory_mode == 3) {
         xarm_geo::trajectories::InnerCavityScan traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
-                              params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
     }
     if (params.trajectory_mode == 4) {
         xarm_geo::trajectories::TiltingCircle traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, traj_duration, q_home,
-                              params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
     }
 }

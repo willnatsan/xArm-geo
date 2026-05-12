@@ -18,9 +18,11 @@ namespace xarm_geo::trajectories {
     class Waypoint {
     public:
         Waypoint(const std::vector<manifold::SE3> &waypoints, double duration)
-            : spline_(build_se3_spline<5>(waypoints, duration)) {}
+            : spline_(build_se3_spline<5>(waypoints, duration)), duration_(duration) {}
 
         [[nodiscard]] auto evaluate(double t, TaskTarget &target) const -> TrajectoryStatus {
+            if (t < 0.0 || t > duration_) { return TrajectoryStatus::OUT_OF_DOMAIN; }
+
             manifold::SE3::Tangent vel;
             manifold::SE3::Tangent acc;
 
@@ -34,8 +36,11 @@ namespace xarm_geo::trajectories {
             return TrajectoryStatus::OK;
         }
 
+        [[nodiscard]] auto duration() const noexcept -> double { return duration_; }
+
     private:
         manifold::SE3::Spline<5> spline_;
+        double duration_;
     };
 
     // --- Compile-Time Concept Verification ---

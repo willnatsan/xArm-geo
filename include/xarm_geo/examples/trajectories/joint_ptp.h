@@ -36,11 +36,6 @@ namespace xarm_geo::trajectories {
         }
 
         [[nodiscard]] auto evaluate(double t, JointTarget &target) const -> TrajectoryStatus {
-            if (target.q.size() != q_start_.size() || target.v.size() != q_start_.size() ||
-                target.a.size() != q_start_.size()) {
-                return TrajectoryStatus::ERROR;
-            }
-
             if (duration_ <= 0.0) {
                 target.q = q_start_ + delta_q_;
                 target.v.setZero();
@@ -68,6 +63,10 @@ namespace xarm_geo::trajectories {
 
             return TrajectoryStatus::OK;
         }
+
+        [[nodiscard]] auto duration() const noexcept -> double { return duration_; }
+
+        [[nodiscard]] auto dof() const noexcept -> int { return static_cast<int>(q_start_.size()); }
 
     private:
         Eigen::VectorXd q_start_;

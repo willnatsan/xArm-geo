@@ -1,12 +1,13 @@
 #pragma once
 
-#include <algorithm>
 #include <concepts>
+#include <limits>
 #include <stdexcept>
-#include <string>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Dense>
+#include <unsupported/Eigen/Splines>
 
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/modelling/collision.h>
@@ -14,7 +15,39 @@
 
 namespace xarm_geo {
 
-    enum class TrajectoryStatus : std::uint8_t { OK, ERROR };
+    // --- Trajectory Status ---
+    //
+    // Returned by every evaluate() call.
+    //   OK              : evaluation succeeded; target has been filled.
+    //   OUT_OF_DOMAIN   : t < 0 or t > duration(); target is unchanged.
+    //   NOT_INITIALISED : trajectory object is not ready (e.g. build_spline()
+    //                     was never called); target is unchanged.
+    //   SOLVER_ERROR    : an internal solver (IK, spline, ...) failed.
+    //   ERROR           : catch-all for errors not covered above.
+
+    enum class TrajectoryStatus : std::uint8_t {
+        OK,
+        OUT_OF_DOMAIN,
+        NOT_INITIALISED,
+        SOLVER_ERROR,
+        ERROR,
+    };
+
+    [[nodiscard]] constexpr auto to_string(TrajectoryStatus s) noexcept -> const char * {
+        switch (s) {
+        case TrajectoryStatus::OK:
+            return "OK";
+        case TrajectoryStatus::OUT_OF_DOMAIN:
+            return "OUT_OF_DOMAIN";
+        case TrajectoryStatus::NOT_INITIALISED:
+            return "NOT_INITIALISED";
+        case TrajectoryStatus::SOLVER_ERROR:
+            return "SOLVER_ERROR";
+        case TrajectoryStatus::ERROR:
+            return "ERROR";
+        }
+        return "UNKNOWN";
+    }
 
     // --- Task-Space Trajectory ---
     //
@@ -27,9 +60,21 @@ namespace xarm_geo {
         manifold::SE3::SpatialAcceleration spatial_acc;
     };
 
+    // A type T satisfies TaskTrajectory if it provides:
+    //
+    //   evaluate(double t, TaskTarget &) const -> TrajectoryStatus
+    //       Fill `target` with the reference pose, body twist, and body
+    //       spatial acceleration at time t.
+    //
+    //   duration() const -> (convertible to double)
+    //       Return the total duration of the trajectory in seconds.
+    //       Infinite-duration / setpoint trajectories should return
+    //       std::numeric_limits<double>::infinity().
+
     template <typename T>
     concept TaskTrajectory = requires(const T &traj, double t, TaskTarget &target) {
         { traj.evaluate(t, target) } -> std::same_as<TrajectoryStatus>;
+        { traj.duration() } -> std::convertible_to<double>;
     };
 
     // --- Joint-Space Trajectory ---
@@ -43,15 +88,30 @@ namespace xarm_geo {
               a(Eigen::VectorXd::Zero(dof)) {}
     };
 
+    // A type T satisfies JointTrajectory if it provides:
+    //
+    //   evaluate(double t, JointTarget &) const -> TrajectoryStatus
+    //       Fill `target` with q, v, a at time t.
+    //
+    //   duration() const -> (convertible to double)
+    //       Total duration in seconds (infinity for setpoints).
+    //
+    //   dof() const -> (convertible to int)
+    //       Degrees of freedom; callers use this to size JointTarget before
+    //       the first evaluate() call.
+
     template <typename T>
     concept JointTrajectory = requires(const T &traj, double t, JointTarget &target) {
         { traj.evaluate(t, target) } -> std::same_as<TrajectoryStatus>;
+        { traj.duration() } -> std::convertible_to<double>;
+        { traj.dof() } -> std::convertible_to<int>;
     };
 
     // --- Setpoint Trajectory Adapters ---
     //
-    // Adapters that take a constant setpoint target and produce a time-invariant
-    // trajectory, satisfying TaskTrajectory / JointTrajectory respectively.
+    // Time-invariant constant-reference trajectories that satisfy the
+    // TaskTrajectory / JointTrajectory concepts. duration() returns +infinity
+    // because a setpoint has no natural time horizon.
 
     struct TaskSetpointTrajectory {
         manifold::SE3 pose;
@@ -62,6 +122,10 @@ namespace xarm_geo {
             out.twist = manifold::SE3::Twist::Zero();
             out.spatial_acc = manifold::SE3::SpatialAcceleration::Zero();
             return TrajectoryStatus::OK;
+        }
+
+        [[nodiscard]] static auto duration() noexcept -> double {
+            return std::numeric_limits<double>::infinity();
         }
     };
 
@@ -77,10 +141,154 @@ namespace xarm_geo {
             out.a.setZero();
             return TrajectoryStatus::OK;
         }
+
+        [[nodiscard]] static auto duration() noexcept -> double {
+            return std::numeric_limits<double>::infinity();
+        }
+
+        [[nodiscard]] auto dof() const noexcept -> int { return static_cast<int>(q.size()); }
     };
 
     static_assert(TaskTrajectory<TaskSetpointTrajectory>);
     static_assert(JointTrajectory<JointSetpointTrajectory>);
+
+    // --- AnalyticTaskTrajectory ---
+    //
+    // Abstract base class for task-space trajectories defined by a closed-form
+    // analytic curve. Derived classes supply the curve geometry via the pure
+    // virtual sample() method; this base handles spline fitting, storage, and
+    // evaluation.
+    //
+    // Usage pattern (mirrors example controllers):
+    //
+    //   class MyTrajectory final : public AnalyticTaskTrajectory {
+    //   public:
+    //       MyTrajectory(const manifold::SE3 &anchor, double duration, double my_param)
+    //           : AnalyticTaskTrajectory(anchor, duration), my_param_(my_param) {
+    //           build_spline();   // must be called after derived members are initialised
+    //       }
+    //
+    //   protected:
+    //       auto sample(double t) const
+    //           -> std::pair<manifold::SO3, Eigen::Vector3d> override {
+    //           // Return (local_rot, local_pos) relative to anchor at time t.
+    //       }
+    //
+    //   private:
+    //       double my_param_;
+    //   };
+    //
+    // evaluate() returns:
+    //   NOT_INITIALISED  if build_spline() was never called.
+    //   OUT_OF_DOMAIN    if t < 0 or t > duration().
+    //   OK               on success (target.pose, .twist, .spatial_acc filled).
+    //
+    // Note: virtual dispatch in sample() occurs only during build_spline()
+    // (once at construction, over num_samples points). The hot-path evaluate()
+    // reads from the pre-built spline directly — no virtual call per tick.
+
+    class AnalyticTaskTrajectory {
+    public:
+        AnalyticTaskTrajectory(manifold::SE3 anchor, double duration, int num_samples = 100);
+        virtual ~AnalyticTaskTrajectory() = default;
+
+        // Non-copyable due to the spline (large internal state); movable.
+        AnalyticTaskTrajectory(const AnalyticTaskTrajectory &) = delete;
+        AnalyticTaskTrajectory &operator=(const AnalyticTaskTrajectory &) = delete;
+        AnalyticTaskTrajectory(AnalyticTaskTrajectory &&) = default;
+        AnalyticTaskTrajectory &operator=(AnalyticTaskTrajectory &&) = default;
+
+        [[nodiscard]] auto evaluate(double t, TaskTarget &target) const -> TrajectoryStatus;
+        [[nodiscard]] auto duration() const noexcept -> double;
+
+    protected:
+        // Override to define the trajectory geometry.
+        // Returns (local_rot, local_pos) expressed relative to the anchor.
+        // The base composes: anchor * SE3(local_rot, local_pos).
+        // Called num_samples times during build_spline(); not called at runtime.
+        [[nodiscard]] virtual auto sample(double t) const
+            -> std::pair<manifold::SO3, Eigen::Vector3d> = 0;
+
+        // Sample the curve and fit the degree-5 B-spline.
+        // Must be called exactly once from the derived constructor, after all
+        // derived members that sample() depends on have been initialised.
+        void build_spline();
+
+    private:
+        manifold::SE3 anchor_;
+        double duration_;
+        int num_samples_;
+        manifold::SE3::Spline<5> spline_;
+        bool initialised_ = false;
+    };
+
+    // --- AnalyticJointTrajectory ---
+    //
+    // Abstract base class for joint-space trajectories defined by a closed-form
+    // analytic curve. Mirror of AnalyticTaskTrajectory for joint space.
+    //
+    // Derived classes supply joint positions via the pure virtual sample()
+    // method. The base fits a degree-5 Eigen spline through the sampled
+    // configurations and provides analytic velocity (v = dq/dt) and
+    // acceleration (a = d²q/dt²) via chain-rule scaling of the spline
+    // derivatives.
+    //
+    // Usage pattern:
+    //
+    //   class MyJointTrajectory final : public AnalyticJointTrajectory {
+    //   public:
+    //       MyJointTrajectory(int dof, double duration, double my_param)
+    //           : AnalyticJointTrajectory(dof, duration), my_param_(my_param) {
+    //           build_spline();   // must be called after derived members are initialised
+    //       }
+    //
+    //   protected:
+    //       auto sample(double t) const -> Eigen::VectorXd override {
+    //           // Return q (size == dof()) at time t.
+    //       }
+    //
+    //   private:
+    //       double my_param_;
+    //   };
+    //
+    // evaluate() returns:
+    //   NOT_INITIALISED  if build_spline() was never called.
+    //   OUT_OF_DOMAIN    if t < 0 or t > duration().
+    //   OK               on success (target.q, .v, .a filled).
+
+    class AnalyticJointTrajectory {
+    public:
+        AnalyticJointTrajectory(int dof, double duration, int num_samples = 100);
+        virtual ~AnalyticJointTrajectory() = default;
+
+        // Non-copyable; movable.
+        AnalyticJointTrajectory(const AnalyticJointTrajectory &) = delete;
+        AnalyticJointTrajectory &operator=(const AnalyticJointTrajectory &) = delete;
+        AnalyticJointTrajectory(AnalyticJointTrajectory &&) = default;
+        AnalyticJointTrajectory &operator=(AnalyticJointTrajectory &&) = default;
+
+        [[nodiscard]] auto evaluate(double t, JointTarget &target) const -> TrajectoryStatus;
+        [[nodiscard]] auto duration() const noexcept -> double;
+        [[nodiscard]] auto dof() const noexcept -> int;
+
+    protected:
+        // Override to define the joint configuration at time t.
+        // Returns a VectorXd of size dof(). Called num_samples times during
+        // build_spline(); not called at runtime.
+        [[nodiscard]] virtual auto sample(double t) const -> Eigen::VectorXd = 0;
+
+        // Sample the curve and fit the degree-5 Eigen spline.
+        // Must be called once from the derived constructor, after all derived
+        // members that sample() depends on have been initialised.
+        void build_spline();
+
+    private:
+        int dof_;
+        double duration_;
+        int num_samples_;
+        Eigen::Spline<double, Eigen::Dynamic> spline_;
+        bool initialised_ = false;
+    };
 
     // --- B-Spline Construction Helper ---
     //
@@ -88,14 +296,6 @@ namespace xarm_geo {
     // the boundaries with D repeated copies of the first / last waypoint to
     // satisfy the knot multiplicity required for degree-D continuity at the
     // endpoints.
-    //
-    // `waypoints` is sampled at uniform intervals over [0, duration]. The
-    // resulting spline is parameterised on [0, duration]; each segment spans
-    // dt = duration / (waypoints.size() - 1).
-    //
-    // Useful for building TaskTrajectory implementations that sample an
-    // analytic curve at regular intervals and want a C^{D-1}-smooth path with
-    // well-behaved boundary derivatives.
 
     template <std::size_t D = 5>
     [[nodiscard]] inline auto build_se3_spline(const std::vector<manifold::SE3> &waypoints,
@@ -112,116 +312,6 @@ namespace xarm_geo {
 
         const double dt = duration / static_cast<double>(waypoints.size() - 1);
         return manifold::SE3::Spline<D>(0.0, dt, padded);
-    }
-
-    // --- Trajectory Validation (Collision Detection) ---
-    //
-    // Forward-simulate a trajectory and check for collisions at each step.
-    // Implemented in the header due to templating on the trajectory type.
-    //
-    // Task-space overload: simulates closed-loop execution via a hard-coded
-    // geometric P controller (kp = 8). Validation is representative only if
-    // the runtime controller resembles this template.
-    // TODO: promote the controller to a template parameter.
-    //
-    // Joint-space overload: samples the trajectory directly (open-loop).
-
-    struct ValidationOptions {
-        double integration_dt = 0.002;
-        double collision_check_dt = 0.05;
-    };
-
-    struct ValidationResult {
-        bool valid = true;
-        double failure_time = -1.0;
-        std::string reason;  // human-readable failure reason
-    };
-
-    template <TaskTrajectory T>
-    auto validate_trajectory(const Model &model, Data &data, const CollisionModel &col_model,
-                             CollisionData &col_data, const T &trajectory, double duration,
-                             const Eigen::Ref<const Eigen::VectorXd> &q_start,
-                             const ValidationOptions &options = {}) -> ValidationResult {
-
-        ValidationResult result;
-        TaskTarget target;
-        Eigen::VectorXd q_curr = q_start;
-
-        const double dt = options.integration_dt;
-        const int num_steps = static_cast<int>(duration / dt);
-        double last_collision_t = -options.collision_check_dt;
-        constexpr double kp = 8.0;
-
-        for (int s = 0; s <= num_steps; ++s) {
-            data.q = q_curr;
-            compute_jacobians(model, data);
-
-            const double t = std::min(s * dt, duration);
-            if (trajectory.evaluate(t, target) != TrajectoryStatus::OK) {
-                result.valid = false;
-                result.failure_time = t;
-                result.reason = "trajectory_evaluate_failed";
-                return result;
-            }
-
-            if ((t - last_collision_t) >= options.collision_check_dt || s == num_steps) {
-                update_geometry_poses(model, data, col_model, col_data);
-                if (compute_collisions(col_model, col_data)) {
-                    result.valid = false;
-                    result.failure_time = t;
-                    result.reason = "collision_detected";
-                    return result;
-                }
-                last_collision_t = t;
-            }
-
-            if (s < num_steps) {
-                const manifold::SE3 pose_err_body = data.ee_pose.inverse() * target.pose;
-                const manifold::SE3::Twist twist_err_body = pose_err_body.log();
-                const manifold::SE3::Twist target_twist_ee = pose_err_body.Ad() * target.twist;
-                const manifold::SE3::Twist cmd_twist = target_twist_ee + (kp * twist_err_body);
-                inverse_diff_kinematics(model, data, cmd_twist);
-                q_curr += data.v_out * dt;
-            }
-        }
-
-        return result;
-    }
-
-    template <JointTrajectory T>
-    auto validate_trajectory(const Model &model, Data &data, const CollisionModel &col_model,
-                             CollisionData &col_data, const T &trajectory, double duration,
-                             const ValidationOptions &options = {}) -> ValidationResult {
-
-        ValidationResult result;
-        JointTarget target(model.dof);
-
-        const double dt = options.integration_dt;
-        const int num_steps = static_cast<int>(duration / dt);
-
-        for (int s = 0; s <= num_steps; ++s) {
-            const double t = std::min(s * dt, duration);
-
-            if (trajectory.evaluate(t, target) != TrajectoryStatus::OK) {
-                result.valid = false;
-                result.failure_time = t;
-                result.reason = "trajectory_evaluate_failed";
-                return result;
-            }
-
-            data.q = target.q;
-            forward_kinematics(model, data);
-            update_geometry_poses(model, data, col_model, col_data);
-
-            if (compute_collisions(col_model, col_data)) {
-                result.valid = false;
-                result.failure_time = t;
-                result.reason = "collision_detected";
-                return result;
-            }
-        }
-
-        return result;
     }
 
 }  // namespace xarm_geo

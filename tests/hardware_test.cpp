@@ -16,7 +16,9 @@
 #include <xarm_geo/interfaces/hardware.h>
 #include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/optimal_kinematics.h>
+#include <xarm_geo/trajectory/adapters.h>
 #include <xarm_geo/trajectory/trajectory.h>
+#include <xarm_geo/trajectory/validate.h>
 #include <xarm_geo/utils/model_builder.h>
 
 // --- Helper: Safety Enclosure ---
@@ -52,14 +54,15 @@ namespace {
     template <xarm_geo::JointTrajectory T>
     auto run_joint_ptp_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
                           xarm_geo::Data &data, xarm_geo::controllers::JointPController &controller,
-                          const T &traj, double duration, xarm_geo::JointState &state,
+                          const T &traj, xarm_geo::JointState &state,
                           xarm_geo::JointVelocity &control_target) -> bool {
 
+        const double duration = traj.duration();
         const double dt = 0.002;
         const auto dt_ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(dt));
 
-        xarm_geo::JointTarget target(model.dof);
+        xarm_geo::JointTarget target(traj.dof());
         auto next_tick = std::chrono::steady_clock::now();
 
         for (double t = 0.0; t < duration && hw.is_running(); t += dt) {
@@ -86,9 +89,10 @@ namespace {
     auto run_task_space_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
                            xarm_geo::Data &data,
                            xarm_geo::controllers::GeometricPController &controller, const T &traj,
-                           double duration, xarm_geo::JointState &state,
-                           xarm_geo::JointVelocity &control_target) -> bool {
+                           xarm_geo::JointState &state, xarm_geo::JointVelocity &control_target)
+        -> bool {
 
+        const double duration = traj.duration();
         const double dt = 0.002;
         const auto dt_ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(dt));
@@ -126,7 +130,8 @@ int main(int argc, char *argv[]) {
 
     try {
         // --- Setup ---
-        const double circle_duration = 30.0;  // HALF SPEED (original was 15.0)
+        const double circle_base_duration = 15.0;
+        constexpr double half_speed = 2.0;
         const double transition_time = 4.0;
 
         xarm_geo::Model model = xarm_geo::build_model(6, "XI130412C23L45");
@@ -153,7 +158,10 @@ int main(int argc, char *argv[]) {
             Eigen::Vector3d::UnitZ() * (q0 - (1.5 * std::numbers::pi)));
         const xarm_geo::manifold::SE3 anchor(rot, center);
 
-        xarm_geo::trajectories::TiltingCircle circle_traj(anchor, circle_duration);
+        // Construct the canonical 15-second tilting circle, then wrap it in
+        // TimeScaledTask to play at half speed.
+        xarm_geo::trajectories::TiltingCircle circle_inner(anchor, circle_base_duration);
+        xarm_geo::TimeScaledTask circle_traj{std::move(circle_inner), half_speed};
 
         // --- Pre-Flight: Find a Collision-Free Start Pose ---
         xarm_geo::TaskTarget start_target;
@@ -171,13 +179,6 @@ int main(int argc, char *argv[]) {
         }
         const Eigen::VectorXd q_start = data.q_out;
 
-        const auto val = xarm_geo::validate_trajectory(model, data, col_model, col_data,
-                                                       circle_traj, circle_duration, q_start);
-        if (!val.valid) {
-            std::cerr << "[ABORT] Safety Violation: " << val.reason << "\n";
-            return 1;
-        }
-
         // --- Controller Setup ---
         // Joint-space P controller for the PTP phases.
         xarm_geo::controllers::JointPController joint_controller(model);
@@ -193,26 +194,30 @@ int main(int argc, char *argv[]) {
         p_controller.constraint_aware = true;
         p_controller.attach_collision(col_model, col_data);
 
+        const auto val = xarm_geo::validate_trajectory(model, data, col_model, col_data,
+                                                       circle_traj, q_start, p_controller);
+        if (val.status != xarm_geo::ValidationStatus::OK) {
+            std::cerr << "[ABORT] Safety Violation: " << val.reason << "\n";
+            return 1;
+        }
+
         // --- Execution ---
         std::cout << "[PHASE 0] Moving to Home... ";
         const xarm_geo::trajectories::JointPTP h_traj(state.q, q_home, transition_time);
-        run_joint_ptp_hw(hw, model, data, joint_controller, h_traj, transition_time, state,
-                         control_target);
+        run_joint_ptp_hw(hw, model, data, joint_controller, h_traj, state, control_target);
         std::cout << "Done.\n[PHASE 1] Approaching Circle... ";
 
         const xarm_geo::trajectories::JointPTP a_traj(q_home, q_start, transition_time);
-        run_joint_ptp_hw(hw, model, data, joint_controller, a_traj, transition_time, state,
-                         control_target);
-        std::cout << "Done.\n[PHASE 2] Executing Tilting Circle (Half Speed)...\n";
+        run_joint_ptp_hw(hw, model, data, joint_controller, a_traj, state, control_target);
+        std::cout
+            << "Done.\n[PHASE 2] Executing Tilting Circle (Half Speed via TimeScaledTask)...\n";
 
-        run_task_space_hw(hw, model, data, p_controller, circle_traj, circle_duration, state,
-                          control_target);
+        run_task_space_hw(hw, model, data, p_controller, circle_traj, state, control_target);
 
         std::cout << "[PHASE 3] Returning Home... ";
         hw.read(state);
         const xarm_geo::trajectories::JointPTP r_traj(state.q, q_home, transition_time);
-        run_joint_ptp_hw(hw, model, data, joint_controller, r_traj, transition_time, state,
-                         control_target);
+        run_joint_ptp_hw(hw, model, data, joint_controller, r_traj, state, control_target);
 
         std::cout << "SUCCESS.\n";
         hw.shutdown();

@@ -152,6 +152,12 @@ namespace xarm_geo {
             int current_m_eq = 0;
             int current_m_in = 0;
             bool initialised = false;
+            // True once qp->solve() has completed at least once. Guards against
+            // passing WARM_START_WITH_PREVIOUS_RESULT to a freshly-constructed QP
+            // whose LDLT has never been factorised (proxsuite 0.7.2 bug: the
+            // first solve skips setup_factorization when refactorize==false,
+            // leaving ldl.dim()==0 and causing a rank_r_update assertion).
+            bool solved_once = false;
         } optik;
 
         // Joint-torque ASIF filter (ProxQP).
@@ -177,6 +183,8 @@ namespace xarm_geo {
             int current_m_eq = 0;
             int current_m_in = 0;
             bool initialised = false;
+            // See OptIKWorkspace::solved_once for rationale.
+            bool solved_once = false;
         } asif;
 
         // Seeded once; reused by IK random restarts.

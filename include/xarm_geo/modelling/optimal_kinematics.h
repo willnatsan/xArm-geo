@@ -17,7 +17,16 @@ namespace xarm_geo {
 
     struct OptimalIKOptions {
         double regularisation = 1e-12;  // Tikhonov Regularisation on H
-        double dt = 0.002;              // Step Size (used by some Constraints/Barriers)
+        double dt = 0.002;              // QP / runtime control timestep (s). Sets the physical
+                                        // meaning of v_out (rad/s) and the velocity-limit window
+                                        // for the differential-IK overloads. Should equal the
+                                        // controller step period.
+        double ik_step_dt = 0.1;        // Position-level IK iteration step (s). Used only by
+                                        // optimal_inverse_kinematics to size the per-iteration
+                                        // Newton step. Decoupled from `dt` so the offline IK can
+                                        // take sensible large steps (≈ 18 deg/joint/iter at the
+                                        // default) without being capped by the real-time velocity
+                                        // limit that applies during closed-loop control.
         int max_iters_qp = 50;          // ProxQP Inner Iterations
         bool warmstart = true;          // Reuse Previous QP Solution
         double tolerance = 1e-4;        // Convergence Threshold (Position-Level IK)

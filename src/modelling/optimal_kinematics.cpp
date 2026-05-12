@@ -26,6 +26,7 @@ namespace xarm_geo {
                 ws.current_m_eq = m_eq;
                 ws.current_m_in = m_in;
                 ws.initialised = false;
+                ws.solved_once = false;
             }
         }
 
@@ -163,14 +164,21 @@ namespace xarm_geo {
         }
 
         ws.qp->settings.max_iter = opts.max_iters_qp;
+        // Use WARM_START_WITH_PREVIOUS_RESULT only after at least one successful
+        // solve, so the LDLT factorisation is already populated. On the very
+        // first solve of a newly-constructed QP the proxsuite 0.7.2 PrimalLDLT
+        // backend skips setup_factorization (leaving ldl.dim()==0), which then
+        // triggers an assertion inside active_set_change -> rank_r_update.
         ws.qp->settings.initial_guess =
-            opts.warmstart ? proxsuite::proxqp::InitialGuessStatus::WARM_START_WITH_PREVIOUS_RESULT
-                           : proxsuite::proxqp::InitialGuessStatus::NO_INITIAL_GUESS;
+            (opts.warmstart && ws.solved_once)
+                ? proxsuite::proxqp::InitialGuessStatus::WARM_START_WITH_PREVIOUS_RESULT
+                : proxsuite::proxqp::InitialGuessStatus::NO_INITIAL_GUESS;
 
         ws.qp->solve();
 
         const auto status = ws.qp->results.info.status;
         if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
+            ws.solved_once = true;
             // QP solution is dq over a step of opts.dt; convert back to rad/s.
             data.v_out = (opts.dt > 0.0) ? (ws.qp->results.x / opts.dt) : ws.qp->results.x;
             return OptimalIKStatus::OK;
@@ -237,8 +245,22 @@ namespace xarm_geo {
 
         assert(q_init.size() == model.dof && "q_init size must equal model.dof");
         assert(opts.dt > 0.0 && "OptimalIKOptions::dt must be positive");
+        assert(opts.ik_step_dt > 0.0 && "OptimalIKOptions::ik_step_dt must be positive");
 
-        const double step_dt = (opts.dt > 0.0) ? opts.dt : 1.0;
+        // Use ik_step_dt for the position-level IK loop, not the runtime `dt`.
+        // This decouples the offline IK's Newton-step size from the physical
+        // controller period; each iteration can now cover a sensible joint-space
+        // displacement (≈ ik_step_dt * q_vel_max per joint) rather than a single
+        // real-time control tick (0.002 s × π ≈ 0.36 deg).
+        const double step_dt = opts.ik_step_dt;
+
+        // Build a local options copy with dt = step_dt so that the composable
+        // solver emits v_out = x_qp / step_dt, and the outer integration
+        //   q_out += v_out * step_dt
+        // collapses back to exactly x_qp (the QP dq), preserving the
+        // velocity-limit bound while using the larger IK step window.
+        OptimalIKOptions ik_opts = opts;
+        ik_opts.dt = step_dt;
 
         FrameTask task;
         task.target = target_pose;
@@ -279,7 +301,7 @@ namespace xarm_geo {
                 }
 
                 const auto status = optimal_inverse_diff_kinematics(
-                    model, data, &col_model, &col_data, tasks, constraints, barriers, opts);
+                    model, data, &col_model, &col_data, tasks, constraints, barriers, ik_opts);
                 if (status != OptimalIKStatus::OK) { break; }
 
                 // Composable solver returns rad/s; integrate over step_dt.

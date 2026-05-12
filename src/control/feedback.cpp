@@ -7,8 +7,11 @@ namespace xarm_geo {
 
         // Decoupled SE(3) navigation function gradient in body frame of g
         // (where g_e = g^{-1} * g_d):
-        //   grad_lin = R_e^T * K_p * p_e
-        //   grad_ang = 0.5 * (K_R * R_e - R_e^T * K_R)^vee
+        //   nabla Phi = ( R_e^T * K_p * p_e ;  0.5 * (K_R * R_e - R_e^T * K_R)^vee )
+        //
+        // Returns -nabla Phi (the body-twist convention used throughout this
+        // codebase), so geometric controllers use  cmd_twist = ad_xi_d - grad
+        // to produce descent. Sign convention matches se3_lie_algebra_gradient.
         // Layout: [linear; angular] (matches `smooth`'s tangent layout; see
         // kinematics.cpp:97).
 
@@ -24,16 +27,18 @@ namespace xarm_geo {
         grad[4] = S(0, 2);
         grad[5] = S(1, 0);
 
-        return grad;
+        return -grad;
     }
 
     auto se3_lie_algebra_gradient(const manifold::SE3 &g_e, const Eigen::Vector3d &kp_pos,
                                   const Eigen::Vector3d &kp_rot) -> manifold::SE3::Twist {
 
-        // Log-map gradient with Jacobian correction:
-        //   nabla Phi_log = - Ad_{g_e} * dr_exp(xi_e) * K * xi_e   where xi_e = log(g_e).
+        // Log-map gradient with right-Jacobian correction:
+        //   nabla Phi_log = Ad_{g_e} * dr_exp(xi_e) * K * xi_e,   xi_e = log(g_e).
+        // The Ad and dr_exp factors collapse to identity when K = k*I (BCH).
         //
-        // The Ad and dr_exp factors collapse to identity when K = k*I (BCH commutation).
+        // Returns -nabla Phi_log (matches se3_lie_group_gradient's sign
+        // convention; callers use  cmd_twist = ad_xi_d - grad  for descent).
 
         const manifold::SE3::Twist xi_e = g_e.log();
 

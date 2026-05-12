@@ -25,6 +25,7 @@ namespace xarm_geo {
                 ws.current_m_eq = m_eq;
                 ws.current_m_in = m_in;
                 ws.initialised = false;
+                ws.solved_once = false;
             }
         }
 
@@ -148,14 +149,18 @@ namespace xarm_geo {
         }
 
         ws.qp->settings.max_iter = opts.max_iters_qp;
+        // Use WARM_START_WITH_PREVIOUS_RESULT only after at least one successful
+        // solve. See Data::ASIFWorkspace::solved_once for the full rationale.
         ws.qp->settings.initial_guess =
-            opts.warmstart ? proxsuite::proxqp::InitialGuessStatus::WARM_START_WITH_PREVIOUS_RESULT
-                           : proxsuite::proxqp::InitialGuessStatus::NO_INITIAL_GUESS;
+            (opts.warmstart && ws.solved_once)
+                ? proxsuite::proxqp::InitialGuessStatus::WARM_START_WITH_PREVIOUS_RESULT
+                : proxsuite::proxqp::InitialGuessStatus::NO_INITIAL_GUESS;
 
         ws.qp->solve();
 
         const auto status = ws.qp->results.info.status;
         if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
+            ws.solved_once = true;
             tau_safe = ws.qp->results.x;
             return ASIFStatus::OK;
         }

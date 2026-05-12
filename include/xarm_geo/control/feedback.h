@@ -44,19 +44,24 @@ namespace xarm_geo {
     //
     //     nabla Phi = ( R_e^T * K_p * p_e ;  0.5 * (K_R R_e - R_e^T K_R)^vee )
     //
-    // K_p, K_R are diagonal (per-axis) gain vectors. Returns a 6-vector in
-    // body-frame [linear; angular] layout.
+    // Returns -nabla Phi (the body-twist convention used throughout this
+    // codebase), so geometric controllers use the textbook form
+    //   cmd_twist = ad_xi_d - grad
+    // to produce descent. K_p, K_R are diagonal (per-axis) gain vectors.
+    // Returns a 6-vector in body-frame [linear; angular] layout. Sign
+    // convention matches se3_lie_algebra_gradient.
     [[nodiscard]] auto se3_lie_group_gradient(const manifold::SE3 &g_e,
                                               const Eigen::Vector3d &kp_pos,
                                               const Eigen::Vector3d &kp_rot)
         -> manifold::SE3::Twist;
 
-    // SE(3) log-map gradient with Jacobian correction.
+    // SE(3) log-map gradient with right-Jacobian correction.
     //
-    //     nabla Phi_log(g_e) = - Ad_{g_e} * dr_exp(log(g_e)) * K * log(g_e)^vee
+    //     nabla Phi_log(g_e) = Ad_{g_e} * dr_exp(log(g_e)) * K * log(g_e)^vee
     //
-    // Reduces to -k * log(g_e) under isotropic scalar gain (Prabhu-Saxena-Sastry
-    // 2020); the correction restores exponential convergence with per-axis K.
+    // Returns -nabla Phi_log (matches se3_lie_group_gradient). Reduces to
+    // -k * log(g_e) under isotropic scalar gain (Prabhu-Saxena-Sastry 2020);
+    // the Ad and dr_exp factors restore exponential convergence for per-axis K.
     // Discontinuous on the antipodal set theta = pi.
     [[nodiscard]] auto se3_lie_algebra_gradient(const manifold::SE3 &g_e,
                                                 const Eigen::Vector3d &kp_pos,

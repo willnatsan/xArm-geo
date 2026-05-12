@@ -171,12 +171,6 @@ namespace xarm_geo {
 
     // --- Convenience Overload (Default Safety Set) ---
 
-    namespace {
-        constexpr double kDefaultDynBarrierAlpha0 = 25.0;
-        constexpr double kDefaultDynBarrierAlpha1 = 10.0;
-        constexpr double kDefaultDynCollisionActivationDistance = 0.05;
-    }  // namespace
-
     auto asif_filter(const Model &model, Data &data, const CollisionModel &col_model,
                      CollisionData &col_data, const Eigen::Ref<const Eigen::VectorXd> &v,
                      const Eigen::Ref<const Eigen::VectorXd> &tau_des,
@@ -190,15 +184,15 @@ namespace xarm_geo {
         (void)compute_min_distance(col_model, col_data);
 
         DynPositionBarrier pbar(model);
-        pbar.alpha_0 = kDefaultDynBarrierAlpha0;
-        pbar.alpha_1 = kDefaultDynBarrierAlpha1;
+        pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
+        pbar.alpha_1 = asif_defaults::kBarrierAlpha1;
 
         DynVelocityBarrier vbar(model);
-        vbar.alpha_0 = kDefaultDynBarrierAlpha0;
+        vbar.alpha_0 = asif_defaults::kBarrierAlpha0;
 
-        DynCollisionBarrier cbar(model, col_model, kDefaultDynCollisionActivationDistance);
-        cbar.alpha_0 = kDefaultDynBarrierAlpha0;
-        cbar.alpha_1 = kDefaultDynBarrierAlpha1;
+        DynCollisionBarrier cbar(model, col_model, asif_defaults::kCollisionActivationDistance);
+        cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
+        cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
 
         const DynamicBarrier *barrier_ptrs[3] = {&pbar, &vbar, &cbar};
         std::span<const DynamicBarrier *const> barriers(barrier_ptrs);

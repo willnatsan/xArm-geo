@@ -140,10 +140,45 @@ namespace xarm_geo {
                 return ControllerStatus::NOT_CONFIGURED;
             }
 
-            // TODO: switch to the composable asif_filter overload to avoid recomputing
-            // data.M / data.h when the base has already populated them.
-            const ASIFStatus asif_status = asif_filter(model, data, *col_model_, *col_data_,
-                                                       ctx.fb.v, tau_des_, tau_safe_, asif_options);
+            // Ensure M and h are populated. The cache is a no-op when the hook
+            // already accessed them (e.g. via feedforward or full bias compensation);
+            // otherwise each does at most one RNEA pass here.
+            (void)dyn.M();
+            (void)dyn.h();
+
+            // Collision pre-requisites for DynCollisionBarrier.
+            update_geometry_poses(model, data, *col_model_, *col_data_);
+            (void)compute_min_distance(*col_model_, *col_data_);
+
+            // Default barrier trio (same gains as the convenience overload).
+            DynPositionBarrier pbar(model);
+            pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
+            pbar.alpha_1 = asif_defaults::kBarrierAlpha1;
+
+            DynVelocityBarrier vbar(model);
+            vbar.alpha_0 = asif_defaults::kBarrierAlpha0;
+
+            DynCollisionBarrier cbar(model, *col_model_,
+                                     asif_defaults::kCollisionActivationDistance);
+            cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
+            cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
+
+            const DynamicBarrier *bar_ptrs[3] = {&pbar, &vbar, &cbar};
+
+            // Auto-populate symmetric torque box from model limits if the caller
+            // left it empty; mirrors the convenience overload's behaviour.
+            ASIFOptions opts_eff = asif_options;
+            if (opts_eff.tau_max.size() != model.dof) {
+                opts_eff.tau_max.resize(model.dof);
+                for (int i = 0; i < model.dof; ++i) {
+                    opts_eff.tau_max[i] = model.limits[i].tau_max;
+                }
+            }
+            if (opts_eff.tau_min.size() != model.dof) { opts_eff.tau_min = -opts_eff.tau_max; }
+
+            const ASIFStatus asif_status =
+                asif_filter(model, data, col_model_, col_data_, ctx.fb.v, tau_des_,
+                            std::span<const DynamicBarrier *const>(bar_ptrs), tau_safe_, opts_eff);
 
             if (asif_status != ASIFStatus::OK) {
                 debug::log("asif_filter failed");
@@ -285,9 +320,49 @@ namespace xarm_geo {
                 return ControllerStatus::NOT_CONFIGURED;
             }
 
-            // TODO: see DynamicTaskControllerBase::update for the same asif_filter redundancy.
-            const ASIFStatus asif_status = asif_filter(model, data, *col_model_, *col_data_,
-                                                       ctx.fb.v, tau_des_, tau_safe_, asif_options);
+            // This base uses lazy kinematics; the composable asif_filter asserts
+            // body_jacobian is sized, so force a refresh here if not already done.
+            kin.refresh();
+
+            // Ensure M and h are populated. The cache is a no-op when the hook
+            // already accessed them (e.g. via full bias compensation); otherwise
+            // each does at most one RNEA pass here.
+            (void)dyn.M();
+            (void)dyn.h();
+
+            // Collision pre-requisites for DynCollisionBarrier.
+            update_geometry_poses(model, data, *col_model_, *col_data_);
+            (void)compute_min_distance(*col_model_, *col_data_);
+
+            // Default barrier trio (same gains as the convenience overload).
+            DynPositionBarrier pbar(model);
+            pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
+            pbar.alpha_1 = asif_defaults::kBarrierAlpha1;
+
+            DynVelocityBarrier vbar(model);
+            vbar.alpha_0 = asif_defaults::kBarrierAlpha0;
+
+            DynCollisionBarrier cbar(model, *col_model_,
+                                     asif_defaults::kCollisionActivationDistance);
+            cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
+            cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
+
+            const DynamicBarrier *bar_ptrs[3] = {&pbar, &vbar, &cbar};
+
+            // Auto-populate symmetric torque box from model limits if the caller
+            // left it empty; mirrors the convenience overload's behaviour.
+            ASIFOptions opts_eff = asif_options;
+            if (opts_eff.tau_max.size() != model.dof) {
+                opts_eff.tau_max.resize(model.dof);
+                for (int i = 0; i < model.dof; ++i) {
+                    opts_eff.tau_max[i] = model.limits[i].tau_max;
+                }
+            }
+            if (opts_eff.tau_min.size() != model.dof) { opts_eff.tau_min = -opts_eff.tau_max; }
+
+            const ASIFStatus asif_status =
+                asif_filter(model, data, col_model_, col_data_, ctx.fb.v, tau_des_,
+                            std::span<const DynamicBarrier *const>(bar_ptrs), tau_safe_, opts_eff);
 
             if (asif_status != ASIFStatus::OK) {
                 debug::log("asif_filter failed");

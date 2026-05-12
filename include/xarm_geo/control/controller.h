@@ -30,11 +30,14 @@
 // the underlying data.* fields directly. The caches guarantee freshness and
 // memoise across hook + base usage.
 //
-// Constraint-aware bases wrap the convenience overloads of
-// optimal_inverse_diff_kinematics / asif_filter, which install an opinionated
-// default safety set (TwistTask + joint/velocity limits + collision barriers
-// for OptIK; dynamic position/velocity/collision barriers for ASIF). To use
-// a custom safety set, write a class satisfying the relevant *Controller
+// Constraint-aware bases install an opinionated default safety set:
+//   - kinematic task base  : optimal_inverse_diff_kinematics convenience overload
+//                            (TwistTask + joint/velocity limits + collision barriers).
+//   - dynamic bases        : composable asif_filter overload with DynPositionBarrier +
+//                            DynVelocityBarrier + DynCollisionBarrier (gains from
+//                            asif_defaults); M and h are taken from the DynamicsCache
+//                            so they are not recomputed when the hook already used them.
+// To use a custom safety set, write a class satisfying the relevant *Controller
 // concept directly rather than subclassing -- see
 // xarm_geo/examples/controllers/custom_controller.h.
 

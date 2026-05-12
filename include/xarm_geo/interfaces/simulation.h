@@ -94,6 +94,12 @@ namespace xarm_geo {
         void set_control_mode(ControlMode mode);
         void reset() const;
 
+        // --- External Wrench Injection (Unmodelled Disturbance Testing) ---
+
+        void apply_external_wrench(const std::string &body_name,
+                                   const manifold::SE3::Wrench &wrench_body);
+        void clear_external_wrenches();
+
         // --- Rendering & Visualisation ---
 
         void render();

@@ -1,6 +1,5 @@
-#include <stdexcept>
-
 #include <mujoco/mjmodel.h>
+#include <stdexcept>
 
 #include <xarm_geo/interfaces/simulation.h>
 #include <xarm_geo_config.h>
@@ -284,6 +283,38 @@ namespace xarm_geo {
     void Simulation::reset() const {
         Eigen::Map<Eigen::VectorXd>(this->data->qvel, this->dof_).setZero();
         Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
+    }
+
+    void Simulation::apply_external_wrench(const std::string &body_name,
+                                           const manifold::SE3::Wrench &wrench_body) {
+        const int body_id = this->get_body_id(body_name);
+        const manifold::SE3 T_wb = this->get_pose(body_id);
+
+        // Rotate Body-Frame Force and Torque into World Frame.
+        const Eigen::Vector3d f_world = T_wb.so3() * wrench_body.head<3>();
+        const Eigen::Vector3d tau_world_at_origin = T_wb.so3() * wrench_body.tail<3>();
+
+        // Lever Arm from Body Frame Origin (xpos) to CoM (xipos) in World Frame.
+        const Eigen::Vector3d r_origin_to_com(
+            this->data->xipos[(3 * body_id) + 0] - this->data->xpos[(3 * body_id) + 0],
+            this->data->xipos[(3 * body_id) + 1] - this->data->xpos[(3 * body_id) + 1],
+            this->data->xipos[(3 * body_id) + 2] - this->data->xpos[(3 * body_id) + 2]);
+
+        // Translate Moment to CoM: tau_at_CoM = tau_at_origin - r_origin_to_CoM x f.
+        const Eigen::Vector3d tau_world_at_com =
+            tau_world_at_origin - r_origin_to_com.cross(f_world);
+
+        // Write World-Frame Wrench into MuJoCo's xfrc_applied [fx fy fz tx ty tz].
+        this->data->xfrc_applied[(6 * body_id) + 0] = f_world.x();
+        this->data->xfrc_applied[(6 * body_id) + 1] = f_world.y();
+        this->data->xfrc_applied[(6 * body_id) + 2] = f_world.z();
+        this->data->xfrc_applied[(6 * body_id) + 3] = tau_world_at_com.x();
+        this->data->xfrc_applied[(6 * body_id) + 4] = tau_world_at_com.y();
+        this->data->xfrc_applied[(6 * body_id) + 5] = tau_world_at_com.z();
+    }
+
+    void Simulation::clear_external_wrenches() {
+        mju_zero(this->data->xfrc_applied, 6 * this->model->nbody);
     }
 
     // --- Rendering & Visualisation ---

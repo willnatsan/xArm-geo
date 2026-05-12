@@ -3,6 +3,8 @@
 
 // --- Controllers ---
 #include <xarm_geo/examples/controllers/custom_controller.h>
+#include <xarm_geo/examples/controllers/euclidean_p_controller.h>
+#include <xarm_geo/examples/controllers/euclidean_pd_controller.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
 #include <xarm_geo/examples/controllers/geometric_pd_controller.h>
 #include <xarm_geo/examples/controllers/geometric_pi_controller.h>

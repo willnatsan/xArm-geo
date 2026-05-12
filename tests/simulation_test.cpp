@@ -6,6 +6,8 @@
 #include <thread>
 
 #include <xarm_geo/core/system.h>
+#include <xarm_geo/examples/controllers/euclidean_p_controller.h>
+#include <xarm_geo/examples/controllers/euclidean_pd_controller.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
 #include <xarm_geo/examples/controllers/geometric_pd_controller.h>
 #include <xarm_geo/examples/controllers/joint_p_controller.h>
@@ -26,10 +28,9 @@ struct TestParams {
     bool show_marker = true;
     bool log_data = false;
     bool check_trajectory = false;
-    bool torque_mode = false;  // false: kinematic P + JointVelocity; true: dynamic PD + JointTorque
-    bool feedforward = true;   // controller FF toggle
-    bool constraint_aware = true;  // route through optimal_inverse_diff_kinematics (kinematic) /
-                                   // asif_filter (dynamic)
+    bool torque_mode = false;
+    bool feedforward = true;
+    bool constraint_aware = true;
 };
 
 auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::Model &model, xarm_geo::Data &data,
@@ -171,8 +172,17 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     // --- Controller Setup ---
     //
-    // Kinematic mode: GeometricPController emits JointVelocity.
+    // Both the geometric and Euclidean variants are instantiated with
+    // IDENTICAL gain values, FF flag, and constraint-aware flag, so any
+    // difference observed in execution is attributable to the control law
+    // (Lie-group SE(3) vs world-frame Euler / RPY) rather than tuning.
+    //
+    // Recommended A/B runs:
+    //   --geometric true  vs --geometric false : isolates the control law.
+    //   ... combined with --torque {false|true}: isolates kinematic vs dynamic.
+    //   ... combined with --constraint_aware {false|true}: shared safety stack.
 
+    // Kinematic pair (JointVelocity).
     xarm_geo::controllers::GeometricPController p_controller(model);
     p_controller.gains.kp_pos.setConstant(8.0);
     p_controller.gains.kp_rot.setConstant(8.0);
@@ -180,19 +190,31 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     p_controller.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { p_controller.attach_collision(col_model, col_data); }
 
-    // Dynamic mode: GeometricPDController emits JointTorque. K_D is set to
-    // a critically-damped baseline relative to K_P.
+    xarm_geo::controllers::EuclideanPController p_baseline(model);
+    p_baseline.gains.kp_pos.setConstant(8.0);
+    p_baseline.gains.kp_rot.setConstant(8.0);
+    p_baseline.use_feedforward = params.feedforward;
+    p_baseline.constraint_aware = params.constraint_aware;
+    if (params.constraint_aware) { p_baseline.attach_collision(col_model, col_data); }
 
+    // Dynamic pair (JointTorque). K_D is set to a critically-damped baseline relative to K_P.
     xarm_geo::controllers::GeometricPDController pd_controller(model);
-
     pd_controller.gains.kp_pos.setConstant(100.0);
     pd_controller.gains.kp_rot.setConstant(50.0);
     pd_controller.gains.kd_lin.setConstant(20.0);
     pd_controller.gains.kd_ang.setConstant(10.0);
-
     pd_controller.use_feedforward = params.feedforward;
     pd_controller.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { pd_controller.attach_collision(col_model, col_data); }
+
+    xarm_geo::controllers::EuclideanPDController pd_baseline(model);
+    pd_baseline.gains.kp_pos.setConstant(100.0);
+    pd_baseline.gains.kp_rot.setConstant(50.0);
+    pd_baseline.gains.kd_lin.setConstant(20.0);
+    pd_baseline.gains.kd_ang.setConstant(10.0);
+    pd_baseline.use_feedforward = params.feedforward;
+    pd_baseline.constraint_aware = params.constraint_aware;
+    if (params.constraint_aware) { pd_baseline.attach_collision(col_model, col_data); }
 
     xarm_geo::JointTorque torque_target(model.dof);
     const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -203,97 +225,29 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
         if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) { break; }
 
+        const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
+
         if (params.torque_mode) {
-            // --- Dynamic Mode: GeometricPDController -> JointTorque ---
-            const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
-            if (pd_controller.update(model, data, ctx, torque_target) !=
-                xarm_geo::ControllerStatus::OK) {
-                std::cerr << "GeometricPDController update failed.\n";
+            // --- Dynamic Mode: (Geometric|Euclidean)PDController -> JointTorque ---
+            const auto status = params.geometric
+                                    ? pd_controller.update(model, data, ctx, torque_target)
+                                    : pd_baseline.update(model, data, ctx, torque_target);
+            if (status != xarm_geo::ControllerStatus::OK) {
+                std::cerr << (params.geometric ? "GeometricPDController" : "EuclideanPDController")
+                          << " update failed.\n";
                 break;
             }
             if (sim.write(torque_target) != xarm_geo::InterfaceStatus::OK) { break; }
-        } else if (params.geometric) {
-            // --- Kinematic Mode: GeometricPController -> JointVelocity ---
-            const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
-            if (p_controller.update(model, data, ctx, control_target) !=
-                xarm_geo::ControllerStatus::OK) {
-                std::cerr << "GeometricPController update failed.\n";
+        } else {
+            // --- Kinematic Mode: (Geometric|Euclidean)PController -> JointVelocity ---
+            const auto status = params.geometric
+                                    ? p_controller.update(model, data, ctx, control_target)
+                                    : p_baseline.update(model, data, ctx, control_target);
+            if (status != xarm_geo::ControllerStatus::OK) {
+                std::cerr << (params.geometric ? "GeometricPController" : "EuclideanPController")
+                          << " update failed.\n";
                 break;
             }
-            if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { break; }
-        } else {
-            // --- Non-Geometric Baseline (Euler-RPY) ---
-            // Hand-rolled feedforward + P, kept verbatim as a comparison
-            // baseline against the geometric controllers.
-            data.q = state.q;
-            xarm_geo::compute_jacobians(model, data);
-
-            xarm_geo::manifold::SE3::Twist cmd_twist;
-            double kp = 8;
-
-            Eigen::Vector3d pos_err_space = task_target.pose.r3() - data.ee_pose.r3();
-
-            Eigen::Matrix3d R_target = task_target.pose.so3().matrix();
-            double target_pitch = std::asin(std::clamp(-R_target(2, 0), -1.0, 1.0));
-            double target_yaw;
-            double target_roll;
-
-            if (std::abs(std::cos(target_pitch)) > 1e-6) {
-                target_yaw = std::atan2(R_target(1, 0), R_target(0, 0));
-                target_roll = std::atan2(R_target(2, 1), R_target(2, 2));
-            } else {
-                target_yaw = 0.0;
-                target_roll = std::atan2(-R_target(0, 1), R_target(1, 1));
-            }
-            Eigen::Vector3d target_euler(target_yaw, target_pitch, target_roll);
-
-            Eigen::Matrix3d R_curr = data.ee_pose.so3().matrix();
-            double curr_pitch = std::asin(std::clamp(-R_curr(2, 0), -1.0, 1.0));
-            double curr_yaw;
-            double curr_roll;
-
-            if (std::abs(std::cos(curr_pitch)) > 1e-6) {
-                curr_yaw = std::atan2(R_curr(1, 0), R_curr(0, 0));
-                curr_roll = std::atan2(R_curr(2, 1), R_curr(2, 2));
-            } else {
-                curr_yaw = 0.0;
-                curr_roll = std::atan2(-R_curr(0, 1), R_curr(1, 1));
-            }
-            Eigen::Vector3d curr_euler(curr_yaw, curr_pitch, curr_roll);
-
-            Eigen::Vector3d rot_err_space = target_euler - curr_euler;
-            for (int i = 0; i < 3; ++i) {
-                while (rot_err_space[i] > std::numbers::pi) {
-                    rot_err_space[i] -= 2.0 * std::numbers::pi;
-                }
-                while (rot_err_space[i] < -std::numbers::pi) {
-                    rot_err_space[i] += 2.0 * std::numbers::pi;
-                }
-            }
-
-            double d_yaw = kp * rot_err_space[0];
-            double d_pitch = kp * rot_err_space[1];
-            double d_roll = kp * rot_err_space[2];
-
-            Eigen::Vector3d omega_space =
-                Eigen::Vector3d::UnitZ() * d_yaw +
-                Eigen::AngleAxisd(curr_yaw, Eigen::Vector3d::UnitZ()) *
-                    (Eigen::Vector3d::UnitY() * d_pitch) +
-                Eigen::AngleAxisd(curr_yaw, Eigen::Vector3d::UnitZ()) *
-                    Eigen::AngleAxisd(curr_pitch, Eigen::Vector3d::UnitY()) *
-                    (Eigen::Vector3d::UnitX() * d_roll);
-
-            Eigen::Matrix3d Rt = R_curr.transpose();
-            cmd_twist.head<3>() = Rt * (kp * pos_err_space);  // Body linear velocity
-            cmd_twist.tail<3>() = Rt * omega_space;           // Body angular velocity
-
-            xarm_geo::manifold::SE3 pose_err = data.ee_pose.inverse() * task_target.pose;
-            cmd_twist += pose_err.Ad() * task_target.twist;
-
-            xarm_geo::IKOptions options;
-            xarm_geo::inverse_diff_kinematics(model, data, cmd_twist, options);
-
-            control_target.v = data.v_out;
             if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { break; }
         }
 

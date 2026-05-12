@@ -18,6 +18,7 @@
 #include <xarm_geo/examples/trajectories/joint_ptp.h>
 #include <xarm_geo/examples/trajectories/large_orientation_step.h>
 #include <xarm_geo/examples/trajectories/pipe_inspection.h>
+#include <xarm_geo/examples/trajectories/task_ptp.h>
 #include <xarm_geo/examples/trajectories/tilting_circle.h>
 #include <xarm_geo/examples/trajectories/waypoint.h>
 #include <xarm_geo/examples/trajectories/wing_inspection.h>

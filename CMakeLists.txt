@@ -118,7 +118,6 @@ add_custom_target(${GENERATOR_TARGET_NAME} ALL DEPENDS ${GENERATED_FILES})
 # --- Building Library ---
 
 set(LIB_SOURCES
-        src/xarm_geo.cpp
         src/trajectory/trajectory.cpp
         src/core/system.cpp
         src/interfaces/hardware.cpp

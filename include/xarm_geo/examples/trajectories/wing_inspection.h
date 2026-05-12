@@ -9,7 +9,7 @@
 
 namespace xarm_geo::trajectories {
 
-    // --- Example: Wing Inspection Trajectory (Task-Space) ---
+    // --- Wing Inspection Trajectory ---
     //
     // Parabolic wing-surface scan: X sweeps laterally, Y scans along span,
     // Z follows the curvature (z = -curvature * x^2). Pitch aligns the

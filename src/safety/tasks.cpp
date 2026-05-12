@@ -4,13 +4,10 @@
 
 namespace xarm_geo {
 
-    // --- FrameTask ---
-    // Body-Frame Pose Tracking
-    //   J = body_jacobian (6 x dof)
-    //   e = log(ee.inverse() * target)   [Right-Minus on SE(3)]
+    // --- Frame Task (Body-Frame Pose Tracking) ---
     //
-    // Note: Caller must have run `compute_jacobians(model, data)` so that
-    //       data.body_jacobian and data.ee_pose are up-to-date for data.q.
+    // J = body_jacobian (6 x dof);  e = log(ee.inverse() * target)  [right-minus on SE(3)].
+    // Caller must have run compute_jacobians(model, data) for the current data.q.
 
     void FrameTask::compute(const Model & /*model*/, Data &data, Eigen::Ref<Eigen::MatrixXd> J,
                             Eigen::Ref<Eigen::VectorXd> e) const {
@@ -19,11 +16,10 @@ namespace xarm_geo {
         e = (target - data.ee_pose);
     }
 
-    // --- PostureTask ---
-    // Joint-Space Tracking: J = I, e = q_ref - q_curr.
-    // If q_curr has not been refreshed (size mismatch), fall back to e = q_ref.
-    // The fallback is deliberate (lets the user defer setting q_curr) -- not an
-    // assert -- but callers should refresh q_curr each tick for correct behaviour.
+    // --- Posture Task (Joint-Space Tracking) ---
+    //
+    // J = I,  e = q_ref - q_curr. If q_curr has not been refreshed (size mismatch),
+    // falls back to e = q_ref to let callers defer setting q_curr.
 
     void PostureTask::compute(const Model & /*model*/, Data & /*data*/,
                               Eigen::Ref<Eigen::MatrixXd> J, Eigen::Ref<Eigen::VectorXd> e) const {
@@ -36,13 +32,10 @@ namespace xarm_geo {
         }
     }
 
-    // --- TwistTask ---
-    // Body-Frame Twist Tracking
-    //   J = body_jacobian (6 x dof)
-    //   e = target_twist * dt
+    // --- Twist Task (Body-Frame Twist Tracking) ---
     //
-    // Note: Caller must have run `compute_jacobians(model, data)` so that
-    //       data.body_jacobian is up-to-date for data.q. `dt` must be > 0.
+    // J = body_jacobian (6 x dof);  e = target_twist * dt.
+    // Caller must have run compute_jacobians(model, data) for the current data.q.
 
     void TwistTask::compute(const Model & /*model*/, Data &data, Eigen::Ref<Eigen::MatrixXd> J,
                             Eigen::Ref<Eigen::VectorXd> e) const {

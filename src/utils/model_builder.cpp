@@ -40,9 +40,9 @@ namespace xarm_geo::internal {
             pose_curr *= transform;
             model.home_pose_tree.emplace_back(pose_curr);
 
-            // Screw Axis for Revolute Z-axis Joint: Transform Local Z-axis to Spatial Frame
-            // Assumes joint axis = local Z (true for all xArm variants; URDFs
-            // with non-Z <axis xyz=...> attributes will be silently incorrect).
+            // Spatial screw axis for the revolute joint. Assumes axis = local Z
+            // (true for all xArm variants; URDFs with non-Z <axis xyz=...>
+            // attributes will be silently incorrect).
             manifold::SE3::Twist S_local_z = manifold::SE3::Twist::Zero();
             S_local_z.tail<3>() = Eigen::Vector3d::UnitZ();
             model.screw_axes_space.emplace_back(pose_curr.Ad() * S_local_z);
@@ -69,12 +69,10 @@ namespace xarm_geo::internal {
         model.home_pose_tree.emplace_back(pose_curr);
         model.home_pose = pose_curr;
 
+        // Map spatial screw axes into each link's local frame.
+        // home_pose_tree[i+1] is the home pose of link i relative to the base.
         for (size_t i = 0; i < model.screw_axes_space.size(); ++i) {
-            // home_pose_tree[0] is the base frame.
-            // home_pose_tree[i + 1] is the home pose of link i relative to the base frame.
             const manifold::SE3 link_i_home_inv = model.home_pose_tree[i + 1].inverse();
-
-            // Map the spatial screw axis into the local frame of the corresponding link
             model.screw_axes_local.emplace_back(link_i_home_inv.Ad() * model.screw_axes_space[i]);
         }
     }
@@ -105,8 +103,7 @@ namespace xarm_geo::internal {
             spatial_inertia_com.bottomRightCorner(3, 3) = mass * Eigen::Matrix3d::Identity();
             spatial_inertias_com.emplace_back(spatial_inertia_com);
 
-            // Reference Frame Change - CoM -> Link Origin (Joint Frame)
-            // Assuming `origin` defines Transform from Link Origin -> CoM
+            // CoM -> link origin frame change (origin defines link-origin -> CoM).
             manifold::SE3 T_origin_com(manifold::SO3::Identity(), com_pos);
             Eigen::Matrix<double, 6, 6> Ad_T_com_origin = T_origin_com.inverse().Ad();
 
@@ -138,7 +135,6 @@ namespace xarm_geo::internal {
 
         std::unordered_map<std::string, int> link_to_joint_map;
 
-        // Parsing Joints
         int joint_idx = 0;
         for (const tinyxml2::XMLElement *child = robot->FirstChildElement(); child != nullptr;
              child = child->NextSiblingElement()) {
@@ -181,8 +177,8 @@ namespace xarm_geo::internal {
                       << ") than DOF (" << model.dof << ")." << "\n";
         }
 
-        // Warn (once) if any joint lacked an <effort> attribute. ASIF and any
-        // torque-mode controller will be unbounded on those joints.
+        // Warn once if any joint lacked <effort>; ASIF / torque controllers
+        // cannot bound those joints.
         bool any_inf_tau = false;
         for (const auto &lim : model.limits) {
             if (!std::isfinite(lim.tau_max)) {
@@ -230,15 +226,14 @@ namespace xarm_geo::internal {
             std::string type = type_attr ? type_attr : "";
 
             if (type == "revolute" || type == "continuous") {
-                // It's an active joint. Map it and increment the index.
+                // Active joint -> map and advance the index.
                 link_to_joint_map[std::string(link_name)] = joint_idx;
                 joint_idx++;
                 if (joint_idx >= kin_model.dof) break;
             } else if (type == "fixed") {
-                // It's a bolted part. Map it to the CURRENT joint index so it moves
-                // with the parent kinematic frame, rather than being glued to the World
-                // (Note: joint_idx is already pointing to the next available index,
-                // so we use joint_idx - 1, safely bounded at 0).
+                // Fixed link -> bind it to the parent's joint frame (so it
+                // moves with the parent, not the world). joint_idx points at
+                // the next free slot; use the previous index, floored at 0.
                 size_t parent_idx = (joint_idx > 0) ? (joint_idx - 1) : 0;
                 link_to_joint_map[std::string(link_name)] = parent_idx;
             }
@@ -255,7 +250,6 @@ namespace xarm_geo::internal {
             std::string link_name = name_attr;
 
             size_t current_joint_idx = 0;
-            // .contains() is C++20. If compiling older, use .count() or .find()
             if (link_to_joint_map.contains(link_name)) {
                 current_joint_idx = link_to_joint_map[link_name];
             }
@@ -267,7 +261,6 @@ namespace xarm_geo::internal {
                 const tinyxml2::XMLElement *geom = col->FirstChildElement("geometry");
                 if (!geom) continue;
 
-                // Handle Meshes
                 const tinyxml2::XMLElement *mesh_xml = geom->FirstChildElement("mesh");
                 if (mesh_xml) {
                     const char *file = mesh_xml->Attribute("filename");
@@ -276,7 +269,6 @@ namespace xarm_geo::internal {
                     std::string file_path(file);
                     const std::string file_prefix = "file://";
 
-                    // If the path starts with "file://", strip it out
                     if (file_path.starts_with(file_prefix)) {
                         file_path.erase(0, file_prefix.length());
                     }
@@ -326,10 +318,9 @@ namespace xarm_geo {
         -> CollisionModel {
         CollisionModel col_model;
 
-        // Load the Geometry from the URDF
         internal::load_geometry_params(col_model, kin_model);
 
-        // Inject Robot-Specific Allowed Collision Matrix (Based on Official SRDF)
+        // Robot-specific allowed-collision matrix (from official SRDF).
         // xArm6 only; other variants will see spurious self-collision pairs.
         // TODO: replace with SRDF parsing for general support.
         if (kin_model.dof == 6) {
@@ -342,7 +333,6 @@ namespace xarm_geo {
             col_model.disable_collision_pair("link4_col", "link6_col");
         }
 
-        // Add the Infinite Ground Plane (If Requested)
         if (add_ground_plane) {
             auto ground_geom = std::make_shared<coal::Halfspace>(coal::Vec3s(0, 0, 1), 0.0);
 
@@ -352,7 +342,6 @@ namespace xarm_geo {
             col_model.add_geometry("ground_plane", 0, ground_pose, ground_geom);
         }
 
-        // Compile the Collision Pairs
         col_model.add_all_collision_pairs();
 
         return col_model;

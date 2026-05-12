@@ -9,7 +9,7 @@
 
 namespace xarm_geo::trajectories {
 
-    // --- Example: Pipe Inspection Trajectory (Task-Space) ---
+    // --- Pipe Inspection Trajectory ---
     //
     // Circular arc in the YZ plane simulating travel around a pipe interior.
     // Pitch tracks the arc angle to keep the tool normal to the pipe wall.

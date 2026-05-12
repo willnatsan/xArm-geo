@@ -6,15 +6,10 @@ namespace xarm_geo {
 
     // --- Dynamics ---
     //
-    // All dynamics functions read the joint configuration `q` from `data.q`.
-    // Joint velocity `v`, joint acceleration `a`, and joint torque `tau` are
-    // signals (inputs/outputs of the algorithm being parameterised) and remain
-    // explicit parameters.
-    //
-    // Note: `forward_kinematics()` must be called beforehand to populate
-    //       `pose_tree_local` (!)
-    // Note: `ee_wrench` must be expressed in the End-Effector Frame (!)
-    // Note: gravity defaults to zero (assumes external compensation, e.g. xArm SDK)
+    // All functions read q from data.q; v, a, tau are explicit signal parameters.
+    // `forward_kinematics()` must be run beforehand to populate pose_tree_local.
+    // `ee_wrench` is expressed in the end-effector frame.
+    // `model.gravity` defaults to zero (assumes external compensation).
 
     void forward_dynamics(const Model &model, Data &data,
                           const Eigen::Ref<const Eigen::VectorXd> &v,
@@ -36,22 +31,15 @@ namespace xarm_geo {
     // Computes Gravity Bias Forces -> data.g
     void compute_gravity_forces(const Model &model, Data &data);
 
-    // Computes the Coriolis Bilinear Product: out = C(q, v_a) * v_b.
+    // Coriolis bilinear product: out = C(q, v_a) * v_b.
     //
-    // C is the joint-space Coriolis matrix derived from the symmetric
-    // Levi-Civita Christoffel symbols of the kinetic-energy metric M(q).
-    // In this form the Coriolis bilinear is symmetric in its two velocity
-    // arguments:
-    //                     C(q, v_a) * v_b == C(q, v_b) * v_a.
+    // Uses the symmetric Levi-Civita Christoffel form, so C(q, v_a) * v_b ==
+    // C(q, v_b) * v_a. Useful for passivity-based controllers that evaluate
+    // the Coriolis feedforward at a velocity other than the actual joint
+    // velocity (e.g. Bullo & Murray geometric PD, Slotine-Li regressor).
     //
-    // Useful for geometric / passivity-based controllers that need a
-    // Coriolis feedforward evaluated at a velocity OTHER than the actual
-    // joint velocity -- e.g. Bullo & Murray's geometric PD ( C(q, q_dot) *
-    // r_dot ) or Slotine--Li's regressor ( C(q, q_dot) * r_dot_filtered ).
-    //
-    // Note: this function calls compute_gravity_forces internally (unless
-    // g_fresh = true) and so overwrites data.g, data.tau_out, and data.rnea
-    // workspaces.
+    // Calls compute_gravity_forces internally (unless g_fresh = true) and
+    // overwrites data.g, data.tau_out, and data.rnea workspaces.
     void compute_coriolis_times(const Model &model, Data &data,
                                 const Eigen::Ref<const Eigen::VectorXd> &v_a,
                                 const Eigen::Ref<const Eigen::VectorXd> &v_b,

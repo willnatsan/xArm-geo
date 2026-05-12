@@ -11,20 +11,11 @@
 
 namespace xarm_geo::controllers {
 
-    // --- Example: Geometric P Controller (Kinematic, Task-Space) ---
+    // --- Geometric P Controller ---
     //
-    // Reference implementation of an SE(3)-tracking kinematic P controller
-    // built on `KinematicTaskControllerBase`. Overrides compute_command_twist
-    // and lets the base handle size checks, kinematics refresh, and
-    // IDK / Optimal IDK routing.
-    //
-    // Body-frame command twist:
-    //
-    //     xi_c = Ad_{g_e} * xi_d - nabla Phi(g_e)         (use_feedforward = true)
-    //     xi_c =                 - nabla Phi(g_e)         (use_feedforward = false)
-    //
-    // Users may copy this file and modify the control law to taste; the rest
-    // of the pipeline is provided by the base.
+    // SE(3)-tracking kinematic P controller. Body-frame command twist:
+    //   xi_c = Ad_{g_e} * xi_d - nabla Phi(g_e)    (use_feedforward = true)
+    //   xi_c =                 - nabla Phi(g_e)    (use_feedforward = false)
 
     class GeometricPController final : public KinematicTaskControllerBase {
     public:
@@ -34,7 +25,7 @@ namespace xarm_geo::controllers {
 
         // --- Public Configuration ---
         SE3FeedbackGains gains;
-        bool use_feedforward = true;  // Kinematic feedforward (Transported reference twist)
+        bool use_feedforward = true;
         GradientType gradient = GradientType::LieGroup;
 
     protected:
@@ -42,27 +33,17 @@ namespace xarm_geo::controllers {
                                    const TaskControllerContext &ctx,
                                    manifold::SE3::Twist &cmd_twist) noexcept -> bool override {
 
-            // Body-frame configuration error: g_e = g^{-1} * g_d.
+            // Body-frame configuration error and gradient.
             const manifold::SE3 g_e = kin.ee_pose().inverse() * ctx.ref.pose;
-
-            // Body-frame gradient (NF or log-map per `gradient`).
             const manifold::SE3::Twist grad =
                 (gradient == GradientType::LieAlgebra)
                     ? se3_lie_algebra_gradient(g_e, gains.kp_pos, gains.kp_rot)
                     : se3_lie_group_gradient(g_e, gains.kp_pos, gains.kp_rot);
 
-            // Transport the reference twist into the current body frame.
+            // Reference twist transported into the current body frame.
             const manifold::SE3::Twist ad_xi_d = g_e.Ad() * ctx.ref.twist;
 
-            // Command twist:
-            //   use_feedforward = true  -> xi_c = Ad * xi_d - grad
-            //   use_feedforward = false -> xi_c =          - grad
-            if (use_feedforward) {
-                cmd_twist = ad_xi_d - grad;
-            } else {
-                cmd_twist = -grad;
-            }
-
+            cmd_twist = use_feedforward ? (ad_xi_d - grad) : -grad;
             return true;
         }
     };

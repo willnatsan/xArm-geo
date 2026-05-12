@@ -19,7 +19,7 @@ namespace xarm_geo {
     class Simulation {
 
     public:
-        // --- MuJoCo Configuration Struct ---
+        // --- MuJoCo Configuration ---
 
         struct Config {
             int window_width = 1200;
@@ -27,7 +27,7 @@ namespace xarm_geo {
             std::string window_title = "xArm-Geo Simulator";
             bool vsync_enabled = true;
 
-            double camera_distance = -1.0;  // -1 = Use MuJoCo Default
+            double camera_distance = -1.0;  // -1 -> MuJoCo default
             double camera_azimuth = 0.0;
             double camera_elevation = -45.0;
             Eigen::Vector3d camera_lookat{0, 0, 0};
@@ -43,18 +43,18 @@ namespace xarm_geo {
             double scroll_sensitivity = 0.05;
         };
 
-        // --- Direct Access (If Needed) ---
+        // --- Direct MuJoCo Access ---
 
         mjModel *model = nullptr;
         mjData *data = nullptr;
 
-        // --- Constructors & Destructors ---
+        // --- Constructors & Destructor ---
 
         explicit Simulation(const std::string &mjcf_file);
         Simulation(const std::string &mjcf_file, const Config &config);
         ~Simulation();
 
-        // --- Concept: Interface (Lifecycle Management & State Reading) ---
+        // --- Interface Concept: Lifecycle & State Reading ---
 
         [[nodiscard]] auto is_running() const -> bool;
         void shutdown();
@@ -63,7 +63,7 @@ namespace xarm_geo {
             return last_read_time_;
         }
 
-        // --- Concept: Controllable (Command Writing) ---
+        // --- Controllable Concept: Command Writing ---
 
         auto write(const JointVelocity &vel) noexcept -> InterfaceStatus;
         auto write(const JointTorque &torque) noexcept -> InterfaceStatus;
@@ -111,19 +111,19 @@ namespace xarm_geo {
         std::chrono::nanoseconds last_read_time_{0};
         ControlMode current_mode_ = ControlMode::VELOCITY;
 
-        // Caches for Actuator Parameters -> Needed for Actuator Switching
+        // Cached actuator parameters; reused by set_control_mode().
         std::vector<double> kv_gains_;
         std::vector<double> force_limits_;
         std::vector<double> vel_limits_;
 
-        // MuJoCo GUI Parameters
+        // MuJoCo GUI.
         GLFWwindow *window_ = nullptr;
         mjvCamera camera_{};
         mjvOption option_{};
         mjvScene scene_{};
         mjrContext context_{};
 
-        // --- GLFW Mouse Callbacks (Must be STATIC) ---
+        // --- Static GLFW Mouse Callbacks ---
 
         static void mouse_button_callback(GLFWwindow *window, int button, int action, int mods);
         static void mouse_move_callback(GLFWwindow *window, double x_pos, double y_pos);

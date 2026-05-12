@@ -8,43 +8,34 @@
 
 namespace xarm_geo {
 
-    // --- Feedback Gains (Convenience Structs) ---
-    // Defaults are zero -> users must set gains explicitly.
-    // Empty defaults surface mistuning loudly.
-
+    // --- SE(3) Feedback Gains ---
+    //
+    // Defaults are zero to surface mistuning loudly.
     struct SE3FeedbackGains {
-        Eigen::Vector3d kp_pos = Eigen::Vector3d::Zero();  // K_p (linear, body frame)
-        Eigen::Vector3d kp_rot = Eigen::Vector3d::Zero();  // K_R (angular, body frame)
-        Eigen::Vector3d kd_lin = Eigen::Vector3d::Zero();  // K_D linear (PD/PID only)
-        Eigen::Vector3d kd_ang = Eigen::Vector3d::Zero();  // K_D angular (PD/PID only)
-        Eigen::Vector3d ki_lin = Eigen::Vector3d::Zero();  // K_I linear (PI/PID only)
-        Eigen::Vector3d ki_ang = Eigen::Vector3d::Zero();  // K_I angular (PI/PID only)
+        Eigen::Vector3d kp_pos = Eigen::Vector3d::Zero();  // K_p linear (body frame)
+        Eigen::Vector3d kp_rot = Eigen::Vector3d::Zero();  // K_R angular (body frame)
+        Eigen::Vector3d kd_lin = Eigen::Vector3d::Zero();  // K_D linear (PD / PID)
+        Eigen::Vector3d kd_ang = Eigen::Vector3d::Zero();  // K_D angular (PD / PID)
+        Eigen::Vector3d ki_lin = Eigen::Vector3d::Zero();  // K_I linear (PI / PID)
+        Eigen::Vector3d ki_ang = Eigen::Vector3d::Zero();  // K_I angular (PI / PID)
     };
 
     // --- Error Gradient Selector ---
     //
-    // Selects which gradient flavour a geometric controller uses. The helpers below
-    // (`*_lie_group_gradient`, `*_lie_algebra_gradient`) implement the corresponding maps;
-    // this enum is the convenience tag a controller exposes to switch between them.
-    //
-    //   LieGroup   : smooth gradient function (via trace operation) -> Almost Global Stability
-    //   LieAlgebra : discontinuous gradient function (via logarithmic map) -> Global Stability
+    // Tag for choosing between the two gradient implementations below:
+    //   LieGroup   : smooth (trace-based) gradient -> almost global stability.
+    //   LieAlgebra : discontinuous (log-map) gradient -> global stability.
 
     enum class GradientType : std::uint8_t { LieGroup, LieAlgebra };
 
-    // --- SE(3) Feedback: Free-Function Building Blocks ---
+    // --- SE(3) Feedback Building Blocks ---
     //
-    // Body-frame primitives for SE(3) feedback controllers (tracking and
-    // setpoint regulation). These helpers are pure functions: stateless,
-    // allocation-free, and independent of `Model` / `Data`. Reusable in
-    // any controller variant (P, PD, PID, MPC, impedance, ...).
+    // Body-frame primitives for SE(3) tracking and setpoint regulation.
+    // Stateless, allocation-free, independent of Model / Data.
     //
-    // Frame conventions (consistent with the rest of the library):
-    //   - g_e = g^{-1} * g_d         (body-frame configuration error;
-    //                                 lives in the tangent space at the
-    //                                 current end-effector pose g)
-    //   - All twists / wrenches are expressed in the body frame of the
-    //     end-effector unless stated otherwise.
+    // Conventions:
+    //   - g_e = g^{-1} * g_d (body-frame configuration error).
+    //   - Twists / wrenches in the body frame unless stated otherwise.
     //   - Tangent layout follows `smooth`: [linear; angular].
 
     // SE(3) navigation-function gradient in the body frame of g.
@@ -60,27 +51,21 @@ namespace xarm_geo {
                                               const Eigen::Vector3d &kp_rot)
         -> manifold::SE3::Twist;
 
-    // SE(3) log-map gradient in the body frame of g, with Jacobian correction.
+    // SE(3) log-map gradient with Jacobian correction.
     //
     //     nabla Phi_log(g_e) = - Ad_{g_e} * dr_exp(log(g_e)) * K * log(g_e)^vee
     //
-    // Reduces to -k * log(g_e) under scalar isotropic gain (Prabhu-Saxena-Sastry
-    // 2020); the correction restores exponential closed-loop convergence with
-    // per-axis K. Discontinuous on the antipodal set theta = pi (smooth's
-    // atan2-based log returns +/-pi*n_hat there).
+    // Reduces to -k * log(g_e) under isotropic scalar gain (Prabhu-Saxena-Sastry
+    // 2020); the correction restores exponential convergence with per-axis K.
+    // Discontinuous on the antipodal set theta = pi.
     [[nodiscard]] auto se3_lie_algebra_gradient(const manifold::SE3 &g_e,
                                                 const Eigen::Vector3d &kp_pos,
                                                 const Eigen::Vector3d &kp_rot)
         -> manifold::SE3::Twist;
 
-    // Body-frame velocity error.
-    //
-    //     xi_e = xi - Ad_{g_e} * xi_d
-    //
-    // `body_twist` is the current end-effector body-frame twist (J_b * v).
-    // `target_twist_body` is the reference body-frame twist (lives in the
-    // body frame of g_d; the Ad_{g_e} transport pulls it into the body frame
-    // of g for comparison).
+    // Body-frame velocity error: xi_e = xi - Ad_{g_e} * xi_d.
+    // `body_twist` is the current EE body twist (J_b * v); `target_twist_body`
+    // is the reference body twist in g_d's frame (Ad_{g_e} transports it).
     [[nodiscard]] auto se3_velocity_error(const manifold::SE3::Twist &body_twist,
                                           const manifold::SE3 &g_e,
                                           const manifold::SE3::Twist &target_twist_body)
@@ -88,17 +73,11 @@ namespace xarm_geo {
 
     // Closed-form time derivative of the transported reference twist.
     //
-    //     d/dt(Ad_{g_e} * xi_d) = -ad_{xi}(Ad_{g_e} * xi_d) + Ad_{g_e} * a_d
-    //
-    // Using ad_v(v) = 0 together with the velocity-error decomposition
-    // xi = xi_e + Ad_{g_e} * xi_d, this is equivalent to
-    //
     //     d/dt(Ad_{g_e} * xi_d) = -ad_{xi_e}(Ad_{g_e} * xi_d) + Ad_{g_e} * a_d
     //
-    // We take xi_e to avoid re-passing xi (already consumed by the K_D term
-    // in the dynamic PD law). `ad_xi_d` is the cached value of Ad_{g_e} *
-    // xi_d (avoids recomputing). `spatial_acc_body` is the reference
-    // body-frame spatial acceleration (= d/dt(xi_d).
+    // (Equivalent to the xi-form via ad_v(v) = 0 and xi = xi_e + Ad_{g_e} * xi_d.)
+    // Takes xi_e to avoid re-passing xi (already consumed by the K_D term).
+    // `ad_xi_d` is the cached Ad_{g_e} * xi_d; `spatial_acc_body` is d/dt(xi_d).
     [[nodiscard]] auto
     se3_transported_acc(const manifold::SE3 &g_e, const manifold::SE3::Twist &xi_e,
                         const manifold::SE3::Twist &ad_xi_d,

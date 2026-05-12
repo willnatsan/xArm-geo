@@ -10,14 +10,13 @@
 
 namespace xarm_geo::trajectories {
 
-    // --- Example: Joint Point-to-Point Trajectory (Joint-Space) ---
+    // --- Joint Point-to-Point Trajectory ---
     //
-    // Minimum-jerk polynomial point-to-point motion in joint space:
+    // Minimum-jerk polynomial joint-space PTP motion:
+    //   q(tau) = q_start + s(tau) * delta_q
+    //   s(tau) = 10*tau^3 - 15*tau^4 + 6*tau^5,   tau = t / duration
     //
-    //     q(tau)     = q_start + s(tau) * delta_q
-    //     s(tau)     = 10*tau^3 - 15*tau^4 + 6*tau^5,    tau = t / duration.
-    //
-    // delta_q is wrapped to [-pi, pi] per joint to take the shortest path.
+    // delta_q is wrapped to [-pi, pi] per joint for the shortest path.
 
     class JointPTP {
     public:
@@ -31,7 +30,7 @@ namespace xarm_geo::trajectories {
 
             delta_q_ = q_end - q_start_;
 
-            // Normalise for Shortest Path [-pi, pi].
+            // Shortest-path wrap to [-pi, pi].
             for (auto &val : delta_q_) { val = manifold::wrap_to_pi(val); }
         }
 
@@ -45,7 +44,6 @@ namespace xarm_geo::trajectories {
 
             t = std::clamp(t, 0.0, duration_);
 
-            // Minimum Jerk Polynomial Formulation.
             const double tau = t / duration_;
             const double tau2 = tau * tau;
             const double tau3 = tau2 * tau;

@@ -5,11 +5,10 @@
 
 namespace xarm_geo {
 
-    // --- KinematicTaskControllerBase ---
+    // --- Kinematic Task Controller Base Class ---
 
     KinematicTaskControllerBase::KinematicTaskControllerBase(const Model & /*model*/) noexcept {
-        // No joint-sized scratch on this base; ctor exists for symmetry and
-        // to keep the construction-style uniform across all four bases.
+        // No joint-sized scratch; ctor kept for symmetry with the other bases.
     }
 
     void KinematicTaskControllerBase::attach_collision(const CollisionModel &col_model,
@@ -27,28 +26,23 @@ namespace xarm_geo {
                                              const TaskControllerContext &ctx,
                                              JointVelocity &out) noexcept -> ControllerStatus {
 
-        // Live-phase size checks: status return (honours noexcept; no UB in release).
         if (ctx.fb.q.size() != model.dof || out.v.size() != model.dof) {
             return ControllerStatus::SIZE_MISMATCH;
         }
 
-        // Sync canonical state
         data.q = ctx.fb.q;
 
-        // Mandatory kinematics refresh: populate data.body_jacobian, data.ee_pose, etc.
-        // Note: Mandatory, as updated kinematics are always required (task-space -> joint-space)
+        // Eager kinematics refresh: task-space -> joint-space routing always needs them.
         compute_jacobians(model, data);
 
-        // Construct hook-side cache (kinematics already fresh; reads through `kin` are free).
         KinematicsCache kin(model, data, /*kin_fresh=*/true);
 
-        // Derived class produces the body-frame command twist.
         manifold::SE3::Twist cmd_twist;
         if (!compute_command_twist(model, data, kin, ctx, cmd_twist)) {
             return ControllerStatus::HOOK_FAILED;
         }
 
-        // Solver path: standard DLS-IDK or safety-aware optimal IDK.
+        // DLS-IDK by default; optimal (safety-aware) IDK when constraint_aware.
         if (constraint_aware) {
             if (col_model_ == nullptr || col_data_ == nullptr) {
                 debug::log("constraint_aware=true but no collision attached; NOT_CONFIGURED");
@@ -70,7 +64,7 @@ namespace xarm_geo {
         return ControllerStatus::OK;
     }
 
-    // --- DynamicTaskControllerBase ---
+    // --- Dynamic Task Controller Base Class ---
 
     DynamicTaskControllerBase::DynamicTaskControllerBase(const Model &model)
         : tau_ctrl_(Eigen::VectorXd::Zero(model.dof)), tau_des_(Eigen::VectorXd::Zero(model.dof)),
@@ -96,30 +90,24 @@ namespace xarm_geo {
             return ControllerStatus::SIZE_MISMATCH;
         }
 
-        // Sync canonical state
         data.q = ctx.fb.q;
 
-        // Mandatory kinematics refresh: always required for task-space -> joint-space routing.
+        // Eager kinematics refresh: task-space -> joint-space routing always needs them.
         compute_jacobians(model, data);
 
-        // Construct hook-side caches; kinematics already fresh; dynamics is always lazy
-        // (first cache access trigger the relevant RNEA / CRBA pass if not already
-        // populated by a prior access).
         KinematicsCache kin(model, data, /*kin_fresh=*/true);
         DynamicsCache dyn(model, data, ctx.fb.v, /*m_fresh=*/false, /*h_fresh=*/false,
                           /*g_fresh=*/false);
 
-        // Derived class produces the body-frame end-effector wrench.
         manifold::SE3::Wrench cmd_wrench;
         if (!compute_command_wrench(model, data, kin, dyn, ctx, cmd_wrench)) {
             return ControllerStatus::HOOK_FAILED;
         }
 
-        // Project task-space wrench to joint torques.
+        // Project body-frame wrench into joint torques.
         tau_ctrl_.noalias() = data.body_jacobian.transpose() * cmd_wrench.coeffs;
 
-        // Bias-force compensation: append the term selected by `bias_compensation`.
-        // Reads route through `dyn` so the cache memoises across hook + base usage.
+        // Bias-force compensation.
         switch (bias_compensation) {
         case BiasCompensation::None:
             tau_des_ = tau_ctrl_;
@@ -132,7 +120,7 @@ namespace xarm_geo {
             break;
         }
 
-        // Optional ASIF certification stage.
+        // Optional ASIF certification.
         if (constraint_aware) {
             if (col_model_ == nullptr || col_data_ == nullptr) {
                 debug::log("constraint_aware=true but no collision attached; NOT_CONFIGURED");
@@ -157,7 +145,7 @@ namespace xarm_geo {
         return ControllerStatus::OK;
     }
 
-    // --- KinematicJointControllerBase ---
+    // --- Kinematic Joint Controller Base Class ---
 
     KinematicJointControllerBase::KinematicJointControllerBase(const Model &model)
         : v_ctrl_(model.dof) {}
@@ -170,23 +158,17 @@ namespace xarm_geo {
             return ControllerStatus::SIZE_MISMATCH;
         }
 
-        // Sync canonical state.
         data.q = ctx.fb.q;
 
-        // Construct hook-side cache; kinematics is lazy
-        // (compute_jacobians runs on first access if the hook needs kinematic state).
         KinematicsCache kin(model, data, /*kin_fresh=*/false);
 
         if (!compute_command_velocity(model, data, kin, ctx, v_ctrl_)) {
             return ControllerStatus::HOOK_FAILED;
         }
 
-        // Direction-preserving velocity-limit rescale.
-        //
-        // For each joint, compute the over-limit factor abs_vel / limit; track the largest
-        // over all joints. If any joint exceeds its limit, divide the whole velocity vector
-        // by that factor -- this clamps the worst-offending joint exactly to its limit and
-        // reduces the rest proportionally, preserving the direction of v_ctrl in joint space.
+        // Direction-preserving velocity-limit rescale: divide the whole vector by the
+        // largest abs_vel / limit factor so the worst joint hits its limit exactly and
+        // the others scale down proportionally.
         if (constraint_aware) {
             double max_excess_factor = 1.0;
             for (int i = 0; i < model.dof; ++i) {
@@ -204,7 +186,7 @@ namespace xarm_geo {
         return ControllerStatus::OK;
     }
 
-    // --- DynamicJointControllerBase ---
+    // --- Dynamic Joint Controller Base Class ---
 
     DynamicJointControllerBase::DynamicJointControllerBase(const Model &model)
         : tau_ctrl_(model.dof), tau_des_(Eigen::VectorXd::Zero(model.dof)),
@@ -230,11 +212,8 @@ namespace xarm_geo {
             return ControllerStatus::SIZE_MISMATCH;
         }
 
-        // Sync canonical state.
         data.q = ctx.fb.q;
 
-        // Construct hook-side caches; both kinematics and dynamics are lazy
-        // (first cache access triggers the relevant computation if needed).
         KinematicsCache kin(model, data, /*kin_fresh=*/false);
         DynamicsCache dyn(model, data, ctx.fb.v, /*m_fresh=*/false, /*h_fresh=*/false,
                           /*g_fresh=*/false);
@@ -243,8 +222,7 @@ namespace xarm_geo {
             return ControllerStatus::HOOK_FAILED;
         }
 
-        // Bias-force compensation: append the term selected by `bias_compensation`.
-        // Reads route through `dyn` so the cache memoises across hook + base usage.
+        // Bias-force compensation.
         switch (bias_compensation) {
         case BiasCompensation::None:
             tau_des_ = tau_ctrl_.tau;
@@ -257,14 +235,14 @@ namespace xarm_geo {
             break;
         }
 
-        // Optional ASIF certification stage.
+        // Optional ASIF certification.
         if (constraint_aware) {
             if (col_model_ == nullptr || col_data_ == nullptr) {
                 debug::log("constraint_aware=true but no collision attached; NOT_CONFIGURED");
                 return ControllerStatus::NOT_CONFIGURED;
             }
 
-            // TODO: see DynamicTaskControllerBase for the same asif_filter redundancy.
+            // TODO: see DynamicTaskControllerBase::update for the same asif_filter redundancy.
             const ASIFStatus status = asif_filter(model, data, *col_model_, *col_data_, ctx.fb.v,
                                                   tau_des_, tau_safe_, asif_options);
 

@@ -5,7 +5,8 @@
 
 namespace xarm_geo {
 
-    // --- VelocityLimit ---
+    // --- Joint Velocity Limit ---
+    //
     // -dt * v_max <= dq <= dt * v_max,    G = I.
 
     void VelocityLimit::compute(const Model &model, Data & /*data*/, Eigen::Ref<Eigen::MatrixXd> G,
@@ -26,7 +27,8 @@ namespace xarm_geo {
         }
     }
 
-    // --- PositionLimit ---
+    // --- Joint Position Limit ---
+    //
     // q_min - data.q <= dq <= q_max - data.q,    G = I.
 
     void PositionLimit::compute(const Model &model, Data &data, Eigen::Ref<Eigen::MatrixXd> G,
@@ -36,7 +38,7 @@ namespace xarm_geo {
         G.setIdentity();
 
         if (data.q.size() != model.dof) {
-            // Defensive: data.q not populated -> emit infinite (effectively absent) bounds.
+            // data.q not populated -> emit infinite (effectively absent) bounds.
             l.setConstant(-std::numeric_limits<double>::infinity());
             u.setConstant(std::numeric_limits<double>::infinity());
             return;

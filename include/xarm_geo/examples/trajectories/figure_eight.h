@@ -9,13 +9,11 @@
 
 namespace xarm_geo::trajectories {
 
-    // --- Example: Figure-Eight Trajectory (Task-Space) ---
+    // --- Figure-Eight Trajectory ---
     //
-    // Lissajous figure-eight pattern in the XY plane with sinusoidal
-    // Z-variation, anchored at a user-supplied SE(3) pose. Time-varying ZYX
-    // Euler orientation (oscillating yaw / pitch with pi-offset roll to
-    // point the tool downward). Sampled at 100 points and fitted to a
-    // degree-5 B-spline for C^4 continuity.
+    // Lissajous figure-eight in the XY plane with sinusoidal Z-variation,
+    // anchored at a user-supplied SE(3) pose. Tool-down orientation with
+    // oscillating yaw and pitch.
 
     class FigureEight final : public AnalyticTaskTrajectory {
     public:
@@ -30,13 +28,11 @@ namespace xarm_geo::trajectories {
     protected:
         [[nodiscard]] auto sample(double t) const
             -> std::pair<manifold::SO3, Eigen::Vector3d> override {
-            // Lissajous Figure-Eight Pattern in XY Plane with Sinusoidal Z-Variation.
             const Eigen::Vector3d local_pos(sx_ * std::sin(omega_ * t),
                                             sy_ * std::sin(2.0 * omega_ * t),
                                             sz_ * std::sin(omega_ * t));
 
-            // Time-Varying ZYX Euler Orientation: Oscillating Yaw/Pitch with Pi-Offset
-            // Roll to Point Tool Downward.
+            // Tool-down roll offset; oscillating yaw and pitch.
             const double roll = std::numbers::pi + (0.3 * std::cos(omega_ * t));
             const double pitch = 0.5 * std::sin(2.0 * omega_ * t);
             const double yaw = 0.8 * std::sin(omega_ * t);

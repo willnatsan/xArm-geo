@@ -9,7 +9,7 @@
 
 namespace xarm_geo::trajectories {
 
-    // --- Example: Inner Cavity Scan Trajectory (Task-Space) ---
+    // --- Inner Cavity Scan Trajectory ---
     //
     // Small linear oscillation along the X-axis to probe cavity depth,
     // combined with an aggressive multi-axis orientation sweep at

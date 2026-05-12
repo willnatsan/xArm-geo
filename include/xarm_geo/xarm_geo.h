@@ -12,5 +12,5 @@
 #include <xarm_geo/trajectory/validate.h>
 #include <xarm_geo/utils/model_builder.h>
 
-// Lazy-Evaluation for Stateful XArm Class -> Managing Stale Data Risk w/o Redundant Re-Computation
-// [Repetitive Control Loop Mitigates Issues w/ Branch Prediction Failures!]
+// TODO: Stateful XArm class that uses lazy evaluation to manage stale-data
+// risk without redundant re-computation in tight control loops.

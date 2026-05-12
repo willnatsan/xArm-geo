@@ -7,7 +7,7 @@
 
 namespace xarm_geo {
 
-    // --- Global Variables (for STATIC Mouse Callbacks) ---
+    // --- Static State For Mouse Callbacks ---
 
     static bool g_button_left = false;
     static bool g_button_middle = false;
@@ -20,7 +20,6 @@ namespace xarm_geo {
     Simulation::Simulation(const std::string &mjcf_file) : Simulation(mjcf_file, Config{}) {}
 
     Simulation::Simulation(const std::string &mjcf_file, const Config &config) : config_(config) {
-        // Load Model
         char error[1000];
         this->model = mj_loadXML((MJCF_PATH + mjcf_file).c_str(), nullptr, error, 1000);
         if (!this->model) {
@@ -32,31 +31,25 @@ namespace xarm_geo {
         }
         this->data = mj_makeData(this->model);
 
-        // Cache Actuator Parameters
+        // Cache actuator parameters from the parsed XML.
         this->kv_gains_.resize(this->model->nu);
         this->force_limits_.resize(this->model->nu);
         this->vel_limits_.resize(this->model->nu);
 
         for (int i = 0; i < this->model->nu; ++i) {
-            // Read the kv gain MuJoCo parsed from the XML (stored in gainprm[0])
             this->kv_gains_[i] = this->model->actuator_gainprm[(i * mjNGAIN) + 0];
-
-            // Read limits directly from the model
-            this->vel_limits_[i] = this->model->actuator_ctrlrange[(i * 2) + 1];     // Max velocity
-            this->force_limits_[i] = this->model->actuator_forcerange[(i * 2) + 1];  // Max torque
+            this->vel_limits_[i] = this->model->actuator_ctrlrange[(i * 2) + 1];
+            this->force_limits_[i] = this->model->actuator_forcerange[(i * 2) + 1];
         }
 
-        // Ensure the simulation starts in the expected mode
         this->current_mode_ = ControlMode::VELOCITY;
 
-        // Set Marker ID
+        // Marker disabled if the configured body is not in the model.
         try {
             this->marker_id_ = this->model->body_mocapid[this->get_body_id(config.marker_name)];
-        } catch (const std::runtime_error &) {
-            this->marker_id_ = -1;  // Disabled if not found
-        }
+        } catch (const std::runtime_error &) { this->marker_id_ = -1; }
 
-        // Initialise GLFW
+        // --- GLFW Window & Visualisation ---
         if (!glfwInit()) {
             throw std::runtime_error("Visualisation Error: Failed to initialize GLFW");
         }
@@ -70,13 +63,11 @@ namespace xarm_geo {
         glfwSwapInterval(config.vsync_enabled ? 1 : 0);
         glfwSetWindowUserPointer(this->window_, this);
 
-        // Configure Visualisation Options
         mjv_defaultOption(&this->option_);
         this->option_.flags[mjVIS_TEXTURE] = config.enable_textures ? 1 : 0;
         this->option_.flags[mjVIS_LIGHT] = config.enable_lighting ? 1 : 0;
         this->option_.geomgroup[mjCAT_DECOR] = config.show_decorations ? 1 : 0;
 
-        // Configure Camera
         mjv_defaultCamera(&this->camera_);
         if (!config.camera_use_defaults) {
             this->camera_.distance = config.camera_distance;
@@ -87,12 +78,11 @@ namespace xarm_geo {
             this->camera_.lookat[2] = config.camera_lookat.z();
         }
 
-        // Initialise Rendering Context
         mjr_defaultContext(&this->context_);
         mjv_makeScene(this->model, &this->scene_, config.max_scene_geoms);
         mjr_makeContext(this->model, &this->context_, config.font_scale);
 
-        // Set Up Callbacks
+        // Callbacks: Backspace resets the simulation; mouse handles camera orbit/zoom.
         glfwSetKeyCallback(
             this->window_, [](GLFWwindow *window, int key, int scancode, int act, int mods) {
                 auto *sim = static_cast<Simulation *>(glfwGetWindowUserPointer(window));
@@ -110,12 +100,12 @@ namespace xarm_geo {
 
     Simulation::~Simulation() { this->shutdown(); }
 
-    // --- Concept: Interface (Lifecycle Management & State Reading) ---
+    // --- Interface Concept: Lifecycle & State Reading ---
 
     auto Simulation::is_running() const -> bool {
         if (this->is_shutdown_) return false;
 
-        // If we have a UI window, its close button dictates our lifecycle.
+        // UI close button dictates lifecycle.
         if (this->window_) { return !glfwWindowShouldClose(this->window_); }
 
         return true;
@@ -148,7 +138,6 @@ namespace xarm_geo {
     auto Simulation::read(JointState &state) noexcept -> InterfaceStatus {
         if (this->is_shutdown_ || !this->data) { return InterfaceStatus::ERROR; };
 
-        // Resize Output Variables if Needed
         if (state.q.size() != this->dof_) { state.q.resize(this->dof_); }
         if (state.v.size() != this->dof_) { state.v.resize(this->dof_); }
         if (state.tau.size() != this->dof_) { state.tau.resize(this->dof_); }
@@ -163,7 +152,7 @@ namespace xarm_geo {
         return InterfaceStatus::OK;
     }
 
-    // --- Concept: Controllable (Command Writing) ---
+    // --- Controllable Concept: Command Writing ---
 
     auto Simulation::write(const JointVelocity &vel) noexcept -> InterfaceStatus {
         if (this->current_mode_ != ControlMode::VELOCITY) { return InterfaceStatus::ERROR; }
@@ -209,7 +198,7 @@ namespace xarm_geo {
     auto Simulation::get_pose(const int body_id) const -> manifold::SE3 {
         const Eigen::Vector3d pos(this->data->xpos + (body_id * 3));
 
-        // Read Quaternion Directly from MuJoCo (w, x, y, z) Instead of Converting via xmat
+        // Read MuJoCo's quaternion (w, x, y, z) directly rather than converting from xmat.
         const mjtNum *q = this->data->xquat + (body_id * 4);
         manifold::SO3 rot(Eigen::Quaterniond(q[0], q[1], q[2], q[3]));
 
@@ -230,7 +219,7 @@ namespace xarm_geo {
         Eigen::Matrix<mjtNum, 3, Eigen::Dynamic, Eigen::RowMajor> J_pos(3, this->model->nv);
         Eigen::Matrix<mjtNum, 3, Eigen::Dynamic, Eigen::RowMajor> J_rot(3, this->model->nv);
 
-        // Evaluate relative to Space Frame
+        // Space-frame Jacobian.
         mj_jac(this->model, this->data, J_pos.data(), J_rot.data(), this->data->xpos, body_id);
 
         J_b.topRows(3) = J_pos.leftCols(this->dof_);
@@ -265,34 +254,28 @@ namespace xarm_geo {
 
         for (int i = 0; i < this->model->nu; ++i) {
             if (mode == ControlMode::VELOCITY) {
-                // Set to Affine Bias Type
+                // Velocity mode: F = kv * ctrl - kv * vel (affine bias).
                 this->model->actuator_biastype[i] = mjBIAS_AFFINE;
-
-                // Restore Velocity Mode: F = kv * ctrl - kv * vel
                 this->model->actuator_gainprm[(i * mjNGAIN) + 0] = this->kv_gains_[i];
                 this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
                 this->model->actuator_biasprm[(i * mjNBIAS) + 2] = -this->kv_gains_[i];
 
-                // Restore velocity limits for control inputs
                 this->model->actuator_ctrlrange[(i * 2) + 0] = -this->vel_limits_[i];
                 this->model->actuator_ctrlrange[(i * 2) + 1] = this->vel_limits_[i];
 
             } else if (mode == ControlMode::TORQUE) {
-                // Set to None Bias Type
+                // Torque mode: F = ctrl (no bias).
                 this->model->actuator_biastype[i] = mjBIAS_NONE;
-
-                // Switch to Torque Mode: F = 1.0 * ctrl
                 this->model->actuator_gainprm[(i * mjNGAIN) + 0] = 1.0;
                 this->model->actuator_biasprm[(i * mjNBIAS) + 1] = 0.0;
                 this->model->actuator_biasprm[(i * mjNBIAS) + 2] = 0.0;
 
-                // Expand control limits to match the actuator's force range
                 this->model->actuator_ctrlrange[(i * 2) + 0] = -this->force_limits_[i];
                 this->model->actuator_ctrlrange[(i * 2) + 1] = this->force_limits_[i];
             }
         }
 
-        // Safety: Zero out the control buffer to prevent violent jumps during transition
+        // Zero the control buffer to prevent jumps during the transition.
         Eigen::Map<Eigen::VectorXd>(this->data->ctrl, this->model->nu).setZero();
 
         current_mode_ = mode;

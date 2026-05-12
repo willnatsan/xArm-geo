@@ -19,104 +19,57 @@
 
 // --- Controller Architecture Notes ---
 //
-// All four base classes follow the same template-method shape:
+// All four base classes follow the same template-method shape: size checks,
+// sync data.q from ctx.fb.q, refresh kinematics (eager on task-space bases,
+// lazy on joint-space bases), construct KinematicsCache/DynamicsCache,
+// invoke the user-supplied hook, run base-specific post-processing, then
+// write `out` exactly once.
 //
-//   update(model, data, ctx, out)
-//     1. Size checks.
-//     2. data.q <- ctx.fb.q.
-//     3. Refresh kinematics (eager on task-space bases; lazy on joint-space bases)
-//        Note: dynamics always lazy
-//     4. Construct KinematicsCache / DynamicsCache
-//     5. Hook: compute_command_<X>(...).  <-- this is what the user writes.
-//     6. Post-processing:
-//          - kinematic-task : route through (optimal_)inverse_diff_kinematics
-//          - dynamic-task   : project J_b^T F, then optional bias add,
-//                             then optional ASIF
-//          - kinematic-joint: optional direction-preserving rescale
-//          - dynamic-joint  : optional bias add, then optional ASIF
-//     7. Write to `out` exactly once at the end.
+// Inside the hook, read kinematic state through the KinematicsCache (kin.X())
+// and dynamic state through the DynamicsCache (dyn.M/h/g()) -- never touch
+// the underlying data.* fields directly. The caches guarantee freshness and
+// memoise across hook + base usage.
 //
-// Hook-side access pattern:
-//   - data.q is canonical and always fresh.
-//   - Kinematic state (Jacobians, EE pose, ...) is read through the
-//     `KinematicsCache` argument: kin.body_jacobian(), kin.ee_pose(), ...
-//   - Dynamic state (M, h, g) is read through the `DynamicsCache` argument:
-//     dyn.M(), dyn.h(), dyn.g().
-//   - The hook should NOT read data.ee_pose / data.body_jacobian / data.M /
-//     data.h / data.g directly: the cache accessors are the canonical path
-//     and guarantee freshness without redundant work.
-
-// --- Customising the constraint / safety set ---
-//
-// The base classes wrap the *convenience* overloads of:
-//   - optimal_inverse_diff_kinematics  (kinematic-task base)
-//   - asif_filter                      (dynamic-task & dynamic-joint bases)
-//
-// Those overloads install an opinionated default safety set:
-//
-//   Optimal IDK : TwistTask + VelocityLimit + PositionLimit +
-//                 CollisionBarrier (activation 0.05 m, alpha 5.0).
-//   ASIF        : DynPositionBarrier + DynVelocityBarrier +
-//                 DynCollisionBarrier (alpha_0 25, alpha_1 10,
-//                 activation 0.05 m). Torque box auto-filled from
-//                 model.limits[i].tau_max.
-//
-// To install custom tasks / constraints / kinematic barriers / dynamic
-// barriers (or to use a different filtering strategy entirely), DO NOT
-// subclass the base. Instead, write your own class that satisfies the
-// relevant *Controller concept (defined at the bottom of this file).
-//
-// Worked Example:
-//   - xarm_geo/examples/controllers/custom_controller.h   (PostureBiasedPController)
-
-// TODO: the convenience overload of `asif_filter` recomputes `data.M` and
-// `data.h` even when the base has already populated them. Switch to the
-// composable overload to share the work.
+// Constraint-aware bases wrap the convenience overloads of
+// optimal_inverse_diff_kinematics / asif_filter, which install an opinionated
+// default safety set (TwistTask + joint/velocity limits + collision barriers
+// for OptIK; dynamic position/velocity/collision barriers for ASIF). To use
+// a custom safety set, write a class satisfying the relevant *Controller
+// concept directly rather than subclassing -- see
+// xarm_geo/examples/controllers/custom_controller.h.
 
 namespace xarm_geo {
 
-    // --- Bias-Force Cancellation Policy (Dynamic Controllers Only) ---
+    // --- Bias-Force Cancellation Policy ---
     //
-    //   None         : out = tau_ctrl
-    //                  (e.g. explicit feedback linearisation, IDA-PBC).
-    //
-    //   GravityOnly  : out = tau_ctrl + g(q)
-    //                  Base injects gravity only; Coriolis is left to the natural dynamics.
-    //                  (Bullo & Murray geometric PD, Slotine--Li adaptive, natural-PD, etc.).
-    //
-    //   Full         : out = tau_ctrl + h(q, q_dot)  with  h = C(q,q_dot)*q_dot + g(q)
-    //                  Base injects the full bias forces.
-    //                  ()Computed Torque Control / inverse-dynamics linearisation)
-    //
-    // Cost: GravityOnly and Full each incur exactly one RNEA pass before the
-    // hook (or share one with refresh_dynamics if enabled). None is free.
+    // Applies only to dynamic controllers. Selects the bias term added to the
+    // hook's tau_ctrl before optional ASIF certification:
+    //   None         : out = tau_ctrl                       (free).
+    //   GravityOnly  : out = tau_ctrl + g(q)                (1 RNEA pass).
+    //   Full         : out = tau_ctrl + h(q, v),
+    //                  where h = C(q,v)*v + g(q)            (1 RNEA pass).
 
     enum class BiasCompensation : std::uint8_t { None, GravityOnly, Full };
 
-    // --- Controller Metadata ---
-
-    // Origin column legend:
-    //   - base   : produced by the *ControllerBase update() pipeline itself.
-    //   - hook   : produced by the user-supplied compute_command_* hook.
-    //   - OptIK  : forwarded from optimal_inverse_diff_kinematics
-    //              (only reachable from the kinematic-task base).
-    //   - ASIF   : forwarded from asif_filter
-    //              (only reachable from the dynamic-task and dynamic-joint bases).
+    // --- Controller Status ---
+    //
+    // Origins:  base  = update() pipeline;  hook  = user-supplied hook;
+    //           OptIK = optimal_inverse_diff_kinematics (kinematic-task only);
+    //           ASIF  = asif_filter (dynamic bases only).
 
     enum class ControllerStatus : std::uint8_t {
-        OK,              // origin: base / hook
-        SIZE_MISMATCH,   // origin: base   -- fb / out vector sizes != model.dof
-        NOT_CONFIGURED,  // origin: base   -- constraint_aware = true but no collision attached
-        HOOK_FAILED,     // origin: hook   -- user-supplied hook returned non-OK
-        INFEASIBLE,      // origin: OptIK or ASIF (mutually exclusive per base; see legend)
-        MAX_ITERS,       // origin: OptIK or ASIF (mutually exclusive per base; see legend)
-        SOLVER_ERROR,    // origin: OptIK or ASIF (mutually exclusive per base; see legend)
+        OK,              // base / hook
+        SIZE_MISMATCH,   // base  -- fb / out vector sizes != model.dof
+        NOT_CONFIGURED,  // base  -- constraint_aware set but no collision attached
+        HOOK_FAILED,     // hook  -- user-supplied hook returned non-OK
+        INFEASIBLE,      // OptIK or ASIF
+        MAX_ITERS,       // OptIK or ASIF
+        SOLVER_ERROR,    // OptIK or ASIF
     };
 
-    // --- Solver Status Mapping (Helper Functions)
+    // --- Solver Status Mapping ---
     //
-    // Translate an upstream solver status (OptimalIKStatus, ASIFStatus) into
-    // the corresponding ControllerStatus.
+    // Translate an upstream solver status into the corresponding ControllerStatus.
 
     [[nodiscard]] constexpr auto to_controller_status(OptimalIKStatus s) noexcept
         -> ControllerStatus {
@@ -159,16 +112,11 @@ namespace xarm_geo {
         std::chrono::nanoseconds dt;
     };
 
-    // --- KinematicsCache (Hook-Side Lazy Accessor for Kinematics State) ---
+    // --- Hook-Side Kinematics Cache ---
     //
-    // Passed by reference into kinematic-controller hooks. Wraps `data` and
-    // exposes lazy accessors for the kinematic fields (Jacobians, EE pose,
-    // pose tree). On first access, computes and caches; subsequent calls in
-    // the same tick are free.
-    //
-    // Inside a hook, read kinematic state through this cache rather than
-    // touching `data` directly: this guarantees freshness without redundant
-    // work and is robust to future changes in the base's refresh policy.
+    // Lazy accessor passed into controller hooks. Wraps `data` and computes
+    // each kinematic field (Jacobians, EE pose, pose tree) at most once per
+    // tick on first access.
 
     class KinematicsCache {
     public:
@@ -214,12 +162,11 @@ namespace xarm_geo {
         bool kin_fresh_;
     };
 
-    // --- DynamicsCache (Hook-Side Lazy Accessor for Dynamics State) ---
+    // --- Hook-Side Dynamics Cache ---
     //
-    // Passed by reference into dynamic-controller hooks. Wraps `data` and
-    // exposes lazy accessors for the joint-space mass matrix M, the full
-    // bias forces h = C(q,v)v + g(q), and the gravity-only bias g. On first
-    // access, computes and caches; subsequent calls in the same tick are free.
+    // Lazy accessor for the joint-space mass matrix M, full bias forces
+    // h = C(q,v)v + g(q), and gravity-only bias g. Each is computed at most
+    // once per tick on first access.
 
     class DynamicsCache {
     public:
@@ -261,21 +208,13 @@ namespace xarm_geo {
         bool g_fresh_;
     };
 
-    // --- Abstract Base: KinematicTaskControllerBase ---
+    // --- Kinematic Task Controller Base Class ---
     //
-    // SE(3)-tracking velocity-mode controllers.
+    // SE(3)-tracking velocity-mode controllers. Eager kinematics refresh; no
+    // dynamics. When constraint_aware is set the base routes through
+    // optimal_inverse_diff_kinematics and a collision model must be attached.
     //
-    // Refresh policy:
-    //   - kinematics : always (compute_jacobians is unconditional).
-    //   - dynamics   : never  (kinematic controller; M, h not needed).
-    //
-    // Public config:
-    //   - constraint_aware (default false): route through
-    //     optimal_inverse_diff_kinematics; requires attach_collision.
-    //   - ik_options, optimal_ik_options.
-    //
-    // Note: derived classes should NOT redefine update(); override only the
-    // protected hook compute_command_twist().
+    // Derived classes override only compute_command_twist().
 
     class KinematicTaskControllerBase {
     public:
@@ -303,30 +242,14 @@ namespace xarm_geo {
         CollisionData *col_data_ = nullptr;
     };
 
-    // --- Abstract Base: DynamicTaskControllerBase ---
+    // --- Dynamic Task Controller Base Class ---
     //
-    // SE(3)-tracking torque-mode controllers.
+    // SE(3)-tracking torque-mode controllers. Eager kinematics, lazy dynamics.
+    // Post-hook pipeline:
+    //   tau = J_b^T * cmd_wrench  +  bias term (per `bias_compensation`)
+    //   out.tau = constraint_aware ? asif_filter(tau) : tau
     //
-    // Refresh policy:
-    //   - kinematics : always (compute_jacobians is unconditional).
-    //   - dynamics   : lazy (M, h, g computed on first dyn.M() / dyn.h() / dyn.g() access).
-    //
-    // Public config:
-    //   - bias_compensation  (default None): see `BiasCompensation` enum for semantics.
-    //   - constraint_aware   (default false): apply ASIF to the resulting torque;
-    //                                         requires attach_collision.
-    //   - asif_options.
-    //
-    // Pipeline (after hook):
-    //   tau_ctrl = J_b^T * cmd_wrench
-    //   switch (bias_compensation):
-    //     None        -> tau_des = tau_ctrl
-    //     GravityOnly -> tau_des = tau_ctrl + g(q)
-    //     Full        -> tau_des = tau_ctrl + h(q, v)
-    //   out.tau  = constraint_aware ? asif_filter(tau_des) : tau_des
-    //
-    // Note: derived classes should NOT redefine update(); override only the
-    // protected hook compute_command_wrench().
+    // Derived classes override only compute_command_wrench().
 
     class DynamicTaskControllerBase {
     public:
@@ -353,29 +276,20 @@ namespace xarm_geo {
         const CollisionModel *col_model_ = nullptr;
         CollisionData *col_data_ = nullptr;
 
-        // Pre-allocated joint-sized scratch (sized in the constructor).
-        // tau_ctrl_ : J_b^T * cmd_wrench (control torque from the hook, projected to joint space).
-        // tau_des_  : tau_ctrl_ plus the bias-compensation term selected by `bias_compensation`.
-        // tau_safe_ : ASIF-certified torque (only used when constraint_aware).
+        // Pre-allocated joint-sized scratch: control torque, bias-compensated
+        // torque, ASIF-certified torque.
         Eigen::VectorXd tau_ctrl_;
         Eigen::VectorXd tau_des_;
         Eigen::VectorXd tau_safe_;
     };
 
-    // --- Abstract Base: KinematicJointControllerBase ---
+    // --- Kinematic Joint Controller Base Class ---
     //
-    // Joint-space velocity-mode controllers.
+    // Joint-space velocity-mode controllers. Lazy kinematics; no dynamics.
+    // When constraint_aware is set, applies a direction-preserving rescale
+    // so |v_i| <= model.limits[i].q_vel_max.
     //
-    // Refresh policy:
-    //   - kinematics : lazy (compute_jacobians runs on first kin.X() access).
-    //   - dynamics   : never.
-    //
-    // Public config:
-    //   - constraint_aware (default false): direction-preserving rescale
-    //                      so |v_i| <= model.limits[i].q_vel_max.
-    //
-    // Pipeline (after hook):
-    //   out.v = constraint_aware ? rescale(v_ctrl) : v_ctrl
+    // Derived classes override only compute_command_velocity().
 
     class KinematicJointControllerBase {
     public:
@@ -393,30 +307,18 @@ namespace xarm_geo {
                                               const JointControllerContext &ctx,
                                               JointVelocity &v_ctrl) noexcept -> bool = 0;
 
-        // Pre-allocated joint-sized scratch (sized in the constructor).
-        // v_ctrl_ : the joint velocity produced by the user's control law.
+        // Joint-sized scratch for the hook's output velocity.
         JointVelocity v_ctrl_;
     };
 
-    // --- Abstract Base: DynamicJointControllerBase ---
+    // --- Dynamic Joint Controller Base Class ---
     //
-    // Joint-space torque-mode controllers.
+    // Joint-space torque-mode controllers. Lazy kinematics and dynamics.
+    // Post-hook pipeline:
+    //   tau = tau_ctrl + bias term (per `bias_compensation`)
+    //   out.tau = constraint_aware ? asif_filter(tau) : tau
     //
-    // Refresh policy:
-    //   - kinematics : lazy (compute_jacobians runs on first kin.X() access).
-    //   - dynamics   : lazy (M, h, g computed on first dyn.M() / dyn.h() / dyn.g() access).
-    //
-    // Public config:
-    //   - bias_compensation  (default None): see `BiasCompensation` enum for semantics.
-    //   - constraint_aware   (default false): apply ASIF; requires attach_collision.
-    //   - asif_options.
-    //
-    // Pipeline (after hook):
-    //   switch (bias_compensation):
-    //     None        -> tau_des = tau_ctrl
-    //     GravityOnly -> tau_des = tau_ctrl + g(q)
-    //     Full        -> tau_des = tau_ctrl + h(q, v)
-    //   out.tau = constraint_aware ? asif_filter(tau_des) : tau_des
+    // Derived classes override only compute_command_torque().
 
     class DynamicJointControllerBase {
     public:
@@ -442,23 +344,18 @@ namespace xarm_geo {
         const CollisionModel *col_model_ = nullptr;
         CollisionData *col_data_ = nullptr;
 
-        // Pre-allocated joint-sized scratch (sized in the constructor).
-        // tau_ctrl_ : the joint torque produced by the user's control law.
-        // tau_des_  : tau_ctrl_ plus the bias-compensation term selected by `bias_compensation`.
-        // tau_safe_ : ASIF-certified torque (only used when constraint_aware).
+        // Pre-allocated joint-sized scratch: control torque, bias-compensated
+        // torque, ASIF-certified torque.
         JointTorque tau_ctrl_;
         Eigen::VectorXd tau_des_;
         Eigen::VectorXd tau_safe_;
     };
 
-    // --- Published Concepts ---
+    // --- Published Controller Concepts ---
     //
-    // Recommended usage: write controllers as subclasses; use these concepts
-    // when authoring generic library code that takes "any controller of category X".
-    //
-    // Scope of the check: these concepts verify the *signature* of update()
-    // (and the inheritance shortcut), not behavioural correctness. Satisfying the
-    // concept is necessary but not sufficient; the doc-blocks are the source of truth.
+    // Concepts for generic code that takes "any controller of category X".
+    // They check the signature of update() (and the inheritance shortcut),
+    // not behavioural correctness.
 
     template <typename T>
     concept KinematicTaskController =
@@ -496,17 +393,12 @@ namespace xarm_geo {
 
     // --- Optional Capability Concepts ---
     //
-    // Opt-in concepts that controller authors can satisfy to advertise
-    // additional capabilities to harness / runtime code. None of these are
-    // required by the four base classes; they are pure capability tags.
-    //
-    // ResettableController : the controller carries internal state (e.g. an
-    //   integrator) that must be zeroed between distinct trajectories.
-    //
-    // ConvergenceObservable : the controller exposes a converged() predicate
-    //   reporting whether the control error has settled below a threshold for
-    //   min_consecutive consecutive ticks. Useful for setpoint regulation
-    //   ("have we arrived?") and for tracking ("has tracking error settled?").
+    // Pure capability tags. Controllers opt in to advertise extra features:
+    //   ResettableController  : exposes reset() to zero internal state
+    //                           (e.g. integrators) between trajectories.
+    //   ConvergenceObservable : exposes converged() reporting whether the
+    //                           error has been below threshold for the last
+    //                           min_consecutive ticks.
 
     template <typename T>
     concept ResettableController = requires(T &c) {

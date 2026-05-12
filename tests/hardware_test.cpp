@@ -21,9 +21,9 @@
 #include <xarm_geo/trajectory/validate.h>
 #include <xarm_geo/utils/model_builder.h>
 
-// --- Helper: Safety Enclosure ---
-// Adds static box geometries around the robot to prevent workspace exits.
-// Disabled by default; uncomment the call site in main() to enable.
+// --- Optional Safety Enclosure ---
+// Static box geometries around the robot to prevent workspace exits.
+// Uncomment the call site in main() to enable.
 // void add_safety_enclosure(xarm_geo::CollisionModel &col_model) {
 //     double thickness = 0.05;
 //     double size = 1.2;
@@ -50,7 +50,7 @@ namespace {
 
     // --- Phase Runners ---
 
-    // Joint-PTP execution loop. Drives a JointPController against a JointTrajectory.
+    // Joint-PTP execution loop: drives a JointPController against a JointTrajectory.
     template <xarm_geo::JointTrajectory T>
     auto run_joint_ptp_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
                           xarm_geo::Data &data, xarm_geo::controllers::JointPController &controller,
@@ -84,7 +84,7 @@ namespace {
         return true;
     }
 
-    // Task-space execution loop. Drives a GeometricPController against a TaskTrajectory.
+    // Task-space execution loop: drives a GeometricPController against a TaskTrajectory.
     template <xarm_geo::TaskTrajectory T>
     auto run_task_space_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
                            xarm_geo::Data &data,
@@ -158,20 +158,17 @@ int main(int argc, char *argv[]) {
             Eigen::Vector3d::UnitZ() * (q0 - (1.5 * std::numbers::pi)));
         const xarm_geo::manifold::SE3 anchor(rot, center);
 
-        // Construct the canonical 15-second tilting circle, then wrap it in
-        // TimeScaledTask to play at half speed.
+        // Half-speed tilting circle (TimeScaledTask wrapping the canonical 15s curve).
         xarm_geo::trajectories::TiltingCircle circle_inner(anchor, circle_base_duration);
         xarm_geo::TimeScaledTask circle_traj{std::move(circle_inner), half_speed};
 
-        // --- Pre-Flight: Find a Collision-Free Start Pose ---
+        // --- Pre-Flight: Find A Collision-Free Start Pose ---
         xarm_geo::TaskTarget start_target;
         if (circle_traj.evaluate(0.0, start_target) != xarm_geo::TrajectoryStatus::OK) {
             std::cerr << "[ABORT] Failed to Evaluate Start Pose\n";
             return 1;
         }
 
-        // optimal_inverse_kinematics enforces collision avoidance and joint
-        // limits as hard constraints inside the QP.
         if (!xarm_geo::optimal_inverse_kinematics(model, data, col_model, col_data, q_home,
                                                   start_target.pose)) {
             std::cerr << "[ABORT] No Collision-Free Start Pose Found!\n";
@@ -180,13 +177,11 @@ int main(int argc, char *argv[]) {
         const Eigen::VectorXd q_start = data.q_out;
 
         // --- Controller Setup ---
-        // Joint-space P controller for the PTP phases.
         xarm_geo::controllers::JointPController joint_controller(model);
         joint_controller.kp.setConstant(5.0);
         joint_controller.use_feedforward = true;
         joint_controller.constraint_aware = true;
 
-        // Task-space geometric P controller
         xarm_geo::controllers::GeometricPController p_controller(model);
         p_controller.gains.kp_pos.setConstant(8.0);
         p_controller.gains.kp_rot.setConstant(8.0);

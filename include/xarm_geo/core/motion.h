@@ -7,8 +7,9 @@
 
 namespace xarm_geo {
 
-    // --- Observation Type (Read from Interface | Controller Feedback) ---
-
+    // --- Joint-Space Observation ---
+    //
+    // Read from an Interface; consumed as controller feedback.
     struct JointState {
         Eigen::VectorXd q;
         Eigen::VectorXd v;
@@ -18,8 +19,9 @@ namespace xarm_geo {
               tau(Eigen::VectorXd::Zero(dof)) {}
     };
 
-    // --- Command Types (Write to Interface | Controller Output) ---
-
+    // --- Joint-Space Commands ---
+    //
+    // Written to an Interface; produced by controllers.
     struct JointCommandBase {};
 
     template <typename T>

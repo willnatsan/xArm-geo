@@ -113,17 +113,10 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     // --- Controller Setup ---
     //
-    // Both the geometric and Euclidean variants are instantiated with
-    // IDENTICAL gain values, FF flag, and constraint-aware flag, so any
-    // difference observed in execution is attributable to the control law
-    // (Lie-group SE(3) vs world-frame Euler / RPY) rather than tuning.
-    //
-    // Recommended A/B runs:
-    //   --geometric true  vs --geometric false : isolates the control law.
-    //   ... combined with --torque {false|true}: isolates kinematic vs dynamic.
-    //   ... combined with --constraint_aware {false|true}: shared safety stack.
+    // Geometric and Euclidean variants share identical gains and flags so
+    // execution differences attribute to the control law, not tuning.
 
-    // Kinematic pair (JointVelocity).
+    // Kinematic pair (JointVelocity output).
     xarm_geo::controllers::GeometricPController p_controller(model);
     p_controller.gains.kp_pos.setConstant(8.0);
     p_controller.gains.kp_rot.setConstant(8.0);
@@ -153,7 +146,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     joint_controller.kp.setConstant(5.0);
     joint_controller.use_feedforward = true;
 
-    // --- PHASE 1: HOME TO START ---
+    // --- Phase 1: Home To Start ---
 
     double start_duration = 3.0;
 
@@ -166,7 +159,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    // --- PHASE 2: MAIN TRAJECTORY EXECUTION ---
+    // --- Phase 2: Main Trajectory Execution ---
 
     std::cout << "\n[PHASE 2] Executing Task Space Trajectory...\n";
 
@@ -200,7 +193,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     p_baseline.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { p_baseline.attach_collision(col_model, col_data); }
 
-    // Dynamic pair (JointTorque). K_D is set to a critically-damped baseline relative to K_P.
+    // Dynamic pair (JointTorque output). K_D is critically-damped relative to K_P.
     xarm_geo::controllers::GeometricPDController pd_controller(model);
     pd_controller.gains.kp_pos.setConstant(100.0);
     pd_controller.gains.kp_rot.setConstant(50.0);
@@ -231,7 +224,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
         const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
 
         if (params.torque_mode) {
-            // --- Dynamic Mode: (Geometric|Euclidean)PDController -> JointTorque ---
+            // Dynamic Mode: (Geometric|Euclidean)PDController -> JointTorque.
             const auto status = params.geometric
                                     ? pd_controller.update(model, data, ctx, torque_target)
                                     : pd_baseline.update(model, data, ctx, torque_target);
@@ -242,7 +235,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
             }
             if (sim.write(torque_target) != xarm_geo::InterfaceStatus::OK) { break; }
         } else {
-            // --- Kinematic Mode: (Geometric|Euclidean)PController -> JointVelocity ---
+            // Kinematic Mode: (Geometric|Euclidean)PController -> JointVelocity.
             const auto status = params.geometric
                                     ? p_controller.update(model, data, ctx, control_target)
                                     : p_baseline.update(model, data, ctx, control_target);
@@ -283,13 +276,12 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
         }
     }
 
-    // --- PHASE 3: END TO HOME ---
+    // --- Phase 3: End To Home ---
 
     std::cout << "\n[PHASE 3] Task Complete. Returning to Home...\n";
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    // Phase 3 uses velocity-mode joint-PTP regardless of Phase 2's actuator
-    // mode. Switch back if we were in torque mode.
+    // Phase 3 always uses velocity-mode joint-PTP; switch back if Phase 2 was torque.
     if (params.torque_mode) { sim.set_control_mode(xarm_geo::ControlMode::VELOCITY); }
 
     double end_duration = 3.0;
@@ -317,7 +309,7 @@ auto main(int argc, char *argv[]) -> int {
 
     TestParams params;
 
-    // --- COMMAND LINE ARGUMENT PARSING ---
+    // --- Command Line Argument Parsing ---
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -367,14 +359,12 @@ auto main(int argc, char *argv[]) -> int {
         }
     }
 
-    // --- SETUP ---
+    // --- Setup ---
 
     xarm_geo::Model model = xarm_geo::build_model(6, "XI130412C23L45");
 
-    // Torque-mode control needs gravity baked into RNEA so compute_bias_forces
-    // (called by the PD controller) returns the correct h(q, v) for gravity
-    // compensation. Velocity-mode leaves gravity at zero (xArm SDK / MuJoCo
-    // velocity actuators handle compensation externally).
+    // Torque mode bakes gravity into RNEA so h(q, v) compensates for it.
+    // Velocity mode delegates compensation to xArm SDK / MuJoCo actuators.
     if (params.torque_mode) { model.gravity = Eigen::Vector3d{0.0, 0.0, -9.81}; }
 
     xarm_geo::Data data(model);
@@ -382,7 +372,6 @@ auto main(int argc, char *argv[]) -> int {
 
     if (params.torque_mode) { sim.set_control_mode(xarm_geo::ControlMode::TORQUE); }
 
-    // Build Collision Model & Data
     xarm_geo::CollisionModel col_model = xarm_geo::build_collision_model(model, true);
     xarm_geo::CollisionData col_data(col_model);
 
@@ -397,11 +386,9 @@ auto main(int argc, char *argv[]) -> int {
     data.q = state.q;
     xarm_geo::compute_jacobians(model, data);
 
-    // Creating Anchor Pose (Centre of Trajectory)
+    // Trajectory anchor pose: centre offset from base, rotated about Z.
     double q0 = q_home[0];
     Eigen::Vector3d center(0.35 * std::cos(q0), 0.35 * std::sin(q0), 0.35);
-
-    // Rotation about Z-axis
     xarm_geo::manifold::SO3 rot =
         xarm_geo::manifold::SO3::exp(Eigen::Vector3d::UnitZ() * (q0 - (1.5 * std::numbers::pi)));
 

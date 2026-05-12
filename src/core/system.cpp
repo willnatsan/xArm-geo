@@ -6,10 +6,9 @@ namespace xarm_geo {
     Data::Data(const Model &model) : rng(std::random_device{}()) {
         int dof = model.dof;
 
-        // --- Canonical Robot State ---
+        // --- Public Outputs ---
         q.setZero(dof);
 
-        // --- Kinematics Outputs ---
         pose_tree.resize(dof + 2, manifold::SE3::Identity());
         pose_tree_local.resize(dof + 2, manifold::SE3::Identity());
 
@@ -21,60 +20,51 @@ namespace xarm_geo {
         q_out.setZero(dof);
         v_out.setZero(dof);
 
-        // --- Dynamics Outputs ---
         M.setZero(dof, dof);
         h.setZero(dof);
         g.setZero(dof);
         tau_out.setZero(dof);
         a_out.setZero(dof);
 
-        // --- Internal IK Workspace ---
+        // --- Internal Workspaces ---
         ik.A.setZero(dof, dof);
         ik.b.setZero(dof);
 
-        // --- Internal RNEA Workspace ---
         rnea.v_links.resize(dof + 2, manifold::SE3::Tangent::Zero());
         rnea.a_links.resize(dof + 2, manifold::SE3::Tangent::Zero());
         rnea.f_links.resize(dof + 2, manifold::SE3::Wrench());
         rnea.T_i_parent_cache.resize(dof + 1, manifold::SE3::Identity());
 
-        // --- Internal Bias-Force Workspace ---
         bias.a_zero.setZero(dof);
 
-        // --- Internal Coriolis-Times Workspace ---
         coriolis.v_sum.setZero(dof);
         coriolis.b_sum.setZero(dof);
         coriolis.b_a.setZero(dof);
         coriolis.b_b.setZero(dof);
 
-        // --- Internal CRBA Workspace ---
         crba.I_C.assign(dof, manifold::SE3::SpatialInertia::Zero());
         crba.F_scratch = manifold::SE3::Wrench();
 
-        // --- Internal Collision Workspace ---
         collision.point_jacobian_1.setZero(3, dof);
         collision.point_jacobian_2.setZero(3, dof);
 
-        // --- Internal OptIK Workspace ---
-        // Note: H/g are sized to dof; A/l/u start empty and grow on demand
-        // when the first set of constraints/barriers is registered.
+        // OptIK: H/g sized to dof; A/l/u grow on demand as constraints register.
         optik.H.setZero(dof, dof);
         optik.g.setZero(dof);
         optik.A.resize(0, dof);
         optik.l.resize(0);
         optik.u.resize(0);
 
-        // Pre-Allocate Per-Task Scratch (FrameTask Default: 6 rows for SE(3))
+        // Per-task scratch: 6 rows for the default FrameTask on SE(3).
         optik.J_task.setZero(6, dof);
         optik.e_task.setZero(6);
 
-        optik.qp.reset();  // Lazy-init on first solve
+        optik.qp.reset();
         optik.current_n = 0;
         optik.current_m_eq = 0;
         optik.current_m_in = 0;
         optik.initialised = false;
 
-        // --- Internal ASIF Workspace ---
         asif.H.setZero(dof, dof);
         asif.g.setZero(dof);
         asif.A.resize(0, dof);

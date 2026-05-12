@@ -8,21 +8,15 @@
 
 namespace xarm_geo {
 
-    // --- ConcatenatedTask<Ts...> ---
+    // --- Concatenated Task Trajectory ---
     //
-    // Chains two or more TaskTrajectory segments end-to-end. The combined
-    // duration is the sum of the individual durations. evaluate(t) locates the
-    // active segment and forwards the time offset into it.
+    // Chains >= 2 TaskTrajectory segments end-to-end; total duration is the
+    // sum of segment durations. Constructed via CTAD: `ConcatenatedTask{seg0, seg1, ...}`.
     //
-    // Construction:
-    //   ConcatenatedTask traj{seg0, seg1, seg2};   // CTAD; takes by move
-    //
-    // Caveats:
-    //   - All segment durations must be finite; an infinite-duration segment
-    //     (e.g. a setpoint) will throw std::invalid_argument at construction.
-    //   - Derivatives (twist, spatial_acc) are NOT smoothed at seam boundaries.
-    //     If seg_i ends with non-zero velocity and seg_{i+1} begins at rest,
-    //     the controller will observe a step change in target.twist.
+    // All segment durations must be finite and positive; infinite-duration
+    // segments throw std::invalid_argument. Derivatives are not smoothed at
+    // segment seams -- expect step changes in target.twist if adjacent
+    // segments don't share boundary velocities.
 
     template <TaskTrajectory... Ts> class ConcatenatedTask {
         static constexpr std::size_t N = sizeof...(Ts);
@@ -88,10 +82,10 @@ namespace xarm_geo {
     // CTAD deduction guide.
     template <TaskTrajectory... Ts> ConcatenatedTask(Ts...) -> ConcatenatedTask<Ts...>;
 
-    // --- ConcatenatedJoint<Ts...> ---
+    // --- Concatenated Joint Trajectory ---
     //
-    // Joint-space counterpart of ConcatenatedTask. All segments must have the
-    // same dof(); an std::invalid_argument is thrown at construction otherwise.
+    // Joint-space counterpart of ConcatenatedTask. All segments must share dof();
+    // mismatches throw std::invalid_argument at construction.
 
     template <JointTrajectory... Ts> class ConcatenatedJoint {
         static constexpr std::size_t N = sizeof...(Ts);
@@ -168,17 +162,13 @@ namespace xarm_geo {
 
     template <JointTrajectory... Ts> ConcatenatedJoint(Ts...) -> ConcatenatedJoint<Ts...>;
 
-    // --- TimeScaledTask<T> ---
+    // --- Time-Scaled Task Trajectory ---
     //
-    // Plays a TaskTrajectory at a different speed. A scale > 1 slows down
-    // (longer duration); a scale < 1 speeds up (shorter duration).
-    //
-    //   duration_out = inner.duration() * scale
-    //   t_inner      = t_out / scale
-    //
-    // Derivatives are chain-rule corrected:
-    //   twist_out        = twist_inner        / scale
-    //   spatial_acc_out  = spatial_acc_inner  / (scale * scale)
+    // Plays a TaskTrajectory at a different speed (scale > 1 slows down,
+    // scale < 1 speeds up). Derivatives are chain-rule corrected:
+    //   duration  = inner.duration() * scale
+    //   twist     = twist_inner       / scale
+    //   spat_acc  = spat_acc_inner    / (scale * scale)
 
     template <TaskTrajectory T> class TimeScaledTask {
     public:
@@ -203,11 +193,10 @@ namespace xarm_geo {
         double scale_;
     };
 
-    // --- TimeScaledJoint<T> ---
+    // --- Time-Scaled Joint Trajectory ---
     //
-    // Joint-space counterpart of TimeScaledTask.
-    //   v_out = v_inner / scale
-    //   a_out = a_inner / (scale * scale)
+    // Joint-space counterpart of TimeScaledTask:
+    //   v = v_inner / scale,  a = a_inner / (scale * scale)
 
     template <JointTrajectory T> class TimeScaledJoint {
     public:
@@ -236,22 +225,16 @@ namespace xarm_geo {
         double scale_;
     };
 
-    // --- OffsetTask<T> ---
+    // --- Offset Task Trajectory ---
     //
-    // Applies a fixed SE(3) transform to every pose produced by a
-    // TaskTrajectory. Two conventions are supported:
-    //
-    //   Left (default): pose_out = transform * pose_inner
-    //     Moves the trajectory to a different world-frame location.
-    //     Body twist and spatial acceleration are unchanged because the
-    //     end-effector body frame is not rotated relative to the original.
-    //
-    //   Right: pose_out = pose_inner * transform
-    //     Applies a fixed tool-frame offset (e.g. extended reach, sensor
-    //     offset). The body frame moves with the trailing transform, so
-    //     twist and spatial_acc must be pulled back:
-    //       twist_out       = Ad_{transform^{-1}} * twist_inner
-    //       spatial_acc_out = Ad_{transform^{-1}} * spatial_acc_inner
+    // Applies a fixed SE(3) transform to every pose, in one of two conventions:
+    //   Left  (default): pose = transform * pose_inner. World-frame relocation;
+    //                    body twist / spatial_acc unchanged.
+    //   Right         : pose = pose_inner * transform. Tool-frame offset
+    //                    (e.g. extended reach); body frame rotates with the
+    //                    trailing transform, so derivatives are pulled back:
+    //                      twist     = Ad_{transform^{-1}} * twist_inner
+    //                      spat_acc  = Ad_{transform^{-1}} * spat_acc_inner
 
     enum class OffsetSide { Left, Right };
 
@@ -265,12 +248,10 @@ namespace xarm_geo {
             if (status != TrajectoryStatus::OK) { return status; }
 
             if (side_ == OffsetSide::Left) {
-                // Pose moves to a different world location; body frame is
-                // unchanged, so body-frame twist and spatial_acc are unaffected.
+                // World-frame relocation; body twist / spatial_acc unaffected.
                 target.pose = transform_ * target.pose;
             } else {
-                // Tool-frame offset: body frame rotates with the transform.
-                // Pull back via Ad_{transform^{-1}} = Ad of the inverse.
+                // Tool-frame offset: pull back via Ad_{transform^{-1}}.
                 const auto Ad_inv = transform_.inverse().Ad();
                 target.pose = target.pose * transform_;
                 target.twist = Ad_inv * target.twist;
@@ -288,18 +269,12 @@ namespace xarm_geo {
         OffsetSide side_;
     };
 
-    // --- ReversedTask<T> ---
+    // --- Reversed Task Trajectory ---
     //
-    // Plays a TaskTrajectory backwards in time.
-    //
-    //   t_inner = duration - t_out
-    //
-    // Body-frame derivative corrections:
-    //   twist_out       = -twist_inner      (velocity reverses sign)
-    //   spatial_acc_out =  spatial_acc_inner (second derivative sign unchanged)
-    //
-    // Note: Be aware that a reversed trajectory starting at non-zero velocity
-    // will present a non-zero initial twist to the controller.
+    // Plays a TaskTrajectory backwards: t_inner = duration - t_out. Velocity
+    // reverses sign; spatial acceleration sign is preserved (d²/d(-t)² = d²/dt²).
+    // A reversed trajectory starting at non-zero velocity will present a
+    // non-zero initial twist to the controller.
 
     template <TaskTrajectory T> class ReversedTask {
     public:
@@ -319,11 +294,9 @@ namespace xarm_geo {
         T inner_;
     };
 
-    // --- ReversedJoint<T> ---
+    // --- Reversed Joint Trajectory ---
     //
-    // Joint-space counterpart of ReversedTask.
-    //   v_out = -v_inner
-    //   a_out =  a_inner  (second derivative; sign unchanged under time reversal)
+    // Joint-space counterpart of ReversedTask: v = -v_inner, a = a_inner.
 
     template <JointTrajectory T> class ReversedJoint {
     public:

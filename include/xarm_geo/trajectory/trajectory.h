@@ -17,20 +17,15 @@ namespace xarm_geo {
 
     // --- Trajectory Status ---
     //
-    // Returned by every evaluate() call.
-    //   OK              : evaluation succeeded; target has been filled.
-    //   OUT_OF_DOMAIN   : t < 0 or t > duration(); target is unchanged.
-    //   NOT_INITIALISED : trajectory object is not ready (e.g. build_spline()
-    //                     was never called); target is unchanged.
-    //   SOLVER_ERROR    : an internal solver (IK, spline, ...) failed.
-    //   ERROR           : catch-all for errors not covered above.
+    // Returned by every evaluate() call. Only OK guarantees that `target`
+    // has been written; all other statuses leave it unchanged.
 
     enum class TrajectoryStatus : std::uint8_t {
         OK,
-        OUT_OF_DOMAIN,
-        NOT_INITIALISED,
-        SOLVER_ERROR,
-        ERROR,
+        OUT_OF_DOMAIN,    // t < 0 or t > duration()
+        NOT_INITIALISED,  // e.g. build_spline() was never called
+        SOLVER_ERROR,     // internal solver (IK, spline, ...) failed
+        ERROR,            // catch-all
     };
 
     [[nodiscard]] constexpr auto to_string(TrajectoryStatus s) noexcept -> const char * {
@@ -51,25 +46,15 @@ namespace xarm_geo {
 
     // --- Task-Space Trajectory ---
     //
-    // All spatial quantities (twist, spatial_acc) are expressed in the
-    // end-effector body frame.
+    // Spatial quantities (twist, spatial_acc) are in the end-effector body frame.
+    // Setpoint / infinite-duration trajectories should return +infinity from
+    // duration().
 
     struct TaskTarget {
         manifold::SE3 pose;
         manifold::SE3::Twist twist;
         manifold::SE3::SpatialAcceleration spatial_acc;
     };
-
-    // A type T satisfies TaskTrajectory if it provides:
-    //
-    //   evaluate(double t, TaskTarget &) const -> TrajectoryStatus
-    //       Fill `target` with the reference pose, body twist, and body
-    //       spatial acceleration at time t.
-    //
-    //   duration() const -> (convertible to double)
-    //       Return the total duration of the trajectory in seconds.
-    //       Infinite-duration / setpoint trajectories should return
-    //       std::numeric_limits<double>::infinity().
 
     template <typename T>
     concept TaskTrajectory = requires(const T &traj, double t, TaskTarget &target) {
@@ -78,6 +63,8 @@ namespace xarm_geo {
     };
 
     // --- Joint-Space Trajectory ---
+    //
+    // dof() is used by callers to size JointTarget before the first evaluate().
 
     struct JointTarget {
         Eigen::VectorXd q;
@@ -88,18 +75,6 @@ namespace xarm_geo {
               a(Eigen::VectorXd::Zero(dof)) {}
     };
 
-    // A type T satisfies JointTrajectory if it provides:
-    //
-    //   evaluate(double t, JointTarget &) const -> TrajectoryStatus
-    //       Fill `target` with q, v, a at time t.
-    //
-    //   duration() const -> (convertible to double)
-    //       Total duration in seconds (infinity for setpoints).
-    //
-    //   dof() const -> (convertible to int)
-    //       Degrees of freedom; callers use this to size JointTarget before
-    //       the first evaluate() call.
-
     template <typename T>
     concept JointTrajectory = requires(const T &traj, double t, JointTarget &target) {
         { traj.evaluate(t, target) } -> std::same_as<TrajectoryStatus>;
@@ -109,9 +84,8 @@ namespace xarm_geo {
 
     // --- Setpoint Trajectory Adapters ---
     //
-    // Time-invariant constant-reference trajectories that satisfy the
-    // TaskTrajectory / JointTrajectory concepts. duration() returns +infinity
-    // because a setpoint has no natural time horizon.
+    // Time-invariant constant-reference trajectories satisfying the concepts.
+    // duration() is +infinity (no natural time horizon).
 
     struct TaskSetpointTrajectory {
         manifold::SE3 pose;
@@ -152,40 +126,15 @@ namespace xarm_geo {
     static_assert(TaskTrajectory<TaskSetpointTrajectory>);
     static_assert(JointTrajectory<JointSetpointTrajectory>);
 
-    // --- AnalyticTaskTrajectory ---
+    // --- Analytic Task Trajectory Base Class ---
     //
-    // Abstract base class for task-space trajectories defined by a closed-form
-    // analytic curve. Derived classes supply the curve geometry via the pure
-    // virtual sample() method; this base handles spline fitting, storage, and
-    // evaluation.
+    // Abstract base for task-space trajectories defined by a closed-form
+    // analytic curve. Derived classes supply the curve geometry via the
+    // virtual sample() method; the base fits a degree-5 SE(3) B-spline once
+    // at construction and serves evaluate() from it -- no virtual dispatch
+    // per tick.
     //
-    // Usage pattern (mirrors example controllers):
-    //
-    //   class MyTrajectory final : public AnalyticTaskTrajectory {
-    //   public:
-    //       MyTrajectory(const manifold::SE3 &anchor, double duration, double my_param)
-    //           : AnalyticTaskTrajectory(anchor, duration), my_param_(my_param) {
-    //           build_spline();   // must be called after derived members are initialised
-    //       }
-    //
-    //   protected:
-    //       auto sample(double t) const
-    //           -> std::pair<manifold::SO3, Eigen::Vector3d> override {
-    //           // Return (local_rot, local_pos) relative to anchor at time t.
-    //       }
-    //
-    //   private:
-    //       double my_param_;
-    //   };
-    //
-    // evaluate() returns:
-    //   NOT_INITIALISED  if build_spline() was never called.
-    //   OUT_OF_DOMAIN    if t < 0 or t > duration().
-    //   OK               on success (target.pose, .twist, .spatial_acc filled).
-    //
-    // Note: virtual dispatch in sample() occurs only during build_spline()
-    // (once at construction, over num_samples points). The hot-path evaluate()
-    // reads from the pre-built spline directly — no virtual call per tick.
+    // See docs/authoring_trajectories.md for the authoring pattern.
 
     class AnalyticTaskTrajectory {
     public:
@@ -202,16 +151,14 @@ namespace xarm_geo {
         [[nodiscard]] auto duration() const noexcept -> double;
 
     protected:
-        // Override to define the trajectory geometry.
-        // Returns (local_rot, local_pos) expressed relative to the anchor.
-        // The base composes: anchor * SE3(local_rot, local_pos).
-        // Called num_samples times during build_spline(); not called at runtime.
+        // Override to define the trajectory geometry. Returns (local_rot, local_pos)
+        // relative to the anchor; the base composes anchor * SE3(local_rot, local_pos).
+        // Called only during build_spline(), never at runtime.
         [[nodiscard]] virtual auto sample(double t) const
             -> std::pair<manifold::SO3, Eigen::Vector3d> = 0;
 
-        // Sample the curve and fit the degree-5 B-spline.
-        // Must be called exactly once from the derived constructor, after all
-        // derived members that sample() depends on have been initialised.
+        // Sample the curve and fit the spline. Must be called once from the
+        // derived constructor after all members read by sample() are initialised.
         void build_spline();
 
     private:
@@ -222,39 +169,13 @@ namespace xarm_geo {
         bool initialised_ = false;
     };
 
-    // --- AnalyticJointTrajectory ---
+    // --- Analytic Joint Trajectory Base Class ---
     //
-    // Abstract base class for joint-space trajectories defined by a closed-form
-    // analytic curve. Mirror of AnalyticTaskTrajectory for joint space.
+    // Joint-space mirror of AnalyticTaskTrajectory. Derived classes supply
+    // joint positions via sample(); the base fits a degree-5 Eigen spline
+    // and provides v = dq/dt and a = d²q/dt² via chain-rule scaling.
     //
-    // Derived classes supply joint positions via the pure virtual sample()
-    // method. The base fits a degree-5 Eigen spline through the sampled
-    // configurations and provides analytic velocity (v = dq/dt) and
-    // acceleration (a = d²q/dt²) via chain-rule scaling of the spline
-    // derivatives.
-    //
-    // Usage pattern:
-    //
-    //   class MyJointTrajectory final : public AnalyticJointTrajectory {
-    //   public:
-    //       MyJointTrajectory(int dof, double duration, double my_param)
-    //           : AnalyticJointTrajectory(dof, duration), my_param_(my_param) {
-    //           build_spline();   // must be called after derived members are initialised
-    //       }
-    //
-    //   protected:
-    //       auto sample(double t) const -> Eigen::VectorXd override {
-    //           // Return q (size == dof()) at time t.
-    //       }
-    //
-    //   private:
-    //       double my_param_;
-    //   };
-    //
-    // evaluate() returns:
-    //   NOT_INITIALISED  if build_spline() was never called.
-    //   OUT_OF_DOMAIN    if t < 0 or t > duration().
-    //   OK               on success (target.q, .v, .a filled).
+    // See docs/authoring_trajectories.md for the authoring pattern.
 
     class AnalyticJointTrajectory {
     public:
@@ -272,14 +193,12 @@ namespace xarm_geo {
         [[nodiscard]] auto dof() const noexcept -> int;
 
     protected:
-        // Override to define the joint configuration at time t.
-        // Returns a VectorXd of size dof(). Called num_samples times during
-        // build_spline(); not called at runtime.
+        // Override to return q at time t (size must equal dof()). Called only
+        // during build_spline(), never at runtime.
         [[nodiscard]] virtual auto sample(double t) const -> Eigen::VectorXd = 0;
 
-        // Sample the curve and fit the degree-5 Eigen spline.
-        // Must be called once from the derived constructor, after all derived
-        // members that sample() depends on have been initialised.
+        // Sample the curve and fit the spline. Must be called once from the
+        // derived constructor after all members read by sample() are initialised.
         void build_spline();
 
     private:
@@ -290,12 +209,11 @@ namespace xarm_geo {
         bool initialised_ = false;
     };
 
-    // --- B-Spline Construction Helper ---
+    // --- SE(3) B-Spline Construction Helper ---
     //
-    // Build a degree-D SE(3) B-spline from a sequence of waypoints, padding
-    // the boundaries with D repeated copies of the first / last waypoint to
-    // satisfy the knot multiplicity required for degree-D continuity at the
-    // endpoints.
+    // Build a degree-D SE(3) B-spline from waypoints, padding the boundaries
+    // with D repeated copies of the first/last waypoint to satisfy endpoint
+    // knot multiplicity for degree-D continuity.
 
     template <std::size_t D = 5>
     [[nodiscard]] inline auto build_se3_spline(const std::vector<manifold::SE3> &waypoints,

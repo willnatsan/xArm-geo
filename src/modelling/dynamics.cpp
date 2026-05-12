@@ -12,16 +12,11 @@ namespace xarm_geo {
         assert(v.size() == model.dof && "v size must equal model.dof");
         assert(tau.size() == model.dof && "tau size must equal model.dof");
 
-        // Compute Bias Forces & Mass Matrix
         compute_bias_forces(model, data, v, ee_wrench);
         compute_mass_matrix(model, data);
 
-        // Rearrange Dynamics Equation to solve for Joint Accelerations
-        // tau = M(q) * a + h
-        // M(q) * a = tau - h
+        // Solve M(q) * a = tau - h for the joint accelerations.
         Eigen::VectorXd tau_diff = tau - data.h;
-
-        // Solve for Joint Accelerations w/ Cholesky Decomposition
         Eigen::LLT<Eigen::MatrixXd> M_llt(data.M);
 
         if (M_llt.info() != Eigen::Success) { debug::log("Cholesky failed on data.M (not PD)"); }
@@ -40,28 +35,27 @@ namespace xarm_geo {
                "pose_tree_local not populated; run forward_kinematics first");
 
         // --- Initial Conditions ---
-        // Setting a_links[0] = (-g, 0) folds gravity into RNEA. With
-        // model.gravity == 0 (default) this matches the externally-compensated
-        // convention.
+        //
+        // a_links[0] = (-g, 0) folds gravity into RNEA. With model.gravity == 0
+        // (default) this matches the externally-compensated convention.
         data.rnea.v_links[0] = manifold::SE3::Twist::Zero();
         manifold::SE3::SpatialAcceleration a0 = manifold::SE3::SpatialAcceleration::Zero();
         a0.head<3>() = -model.gravity;
         data.rnea.a_links[0] = a0;
 
-        // --- Forward Pass (Iterate through moving links 1 to model.dof) ---
+        // --- Forward Pass (Links 1 .. model.dof) ---
+        //
+        // Joint i drives link i+1; cache child-to-parent transforms in T_i_parent_cache.
         for (int i = 0; i < model.dof; ++i) {
-            int link_idx = i + 1;  // Current link (1 to dof)
-            int parent_idx = i;    // Parent link (0 to dof-1)
+            int link_idx = i + 1;
+            int parent_idx = i;
 
-            // Cache Transform from Current Frame to Parent Frame
             data.rnea.T_i_parent_cache[i] = data.pose_tree_local[link_idx].inverse();
             auto Ad_T = data.rnea.T_i_parent_cache[i].Ad();
 
-            // Compute Spatial Twist for Current Frame
             manifold::SE3::Twist joint_v = model.screw_axes_local[i] * v[i];
             data.rnea.v_links[link_idx] = (Ad_T * data.rnea.v_links[parent_idx]) + joint_v;
 
-            // Compute Spatial Acceleration for Current Frame
             manifold::SE3::SpatialAcceleration joint_a = model.screw_axes_local[i] * a[i];
             auto ad_V = manifold::SE3::ad(data.rnea.v_links[link_idx]);
 
@@ -69,36 +63,32 @@ namespace xarm_geo {
                 (Ad_T * data.rnea.a_links[parent_idx]) + (ad_V * joint_v) + joint_a;
         }
 
-        // Cache the End-Effector to Last-Link Transform
+        // End-effector to last-link transform.
         data.rnea.T_i_parent_cache[model.dof] = data.pose_tree_local[model.dof + 1].inverse();
 
-        // --- Backward Pass (Iterate from model.dof down to 1) ---
-
-        // Apply External Wrench at the End-Effector (Index model.dof + 1)
+        // --- Backward Pass (model.dof .. 1) ---
+        //
+        // Apply external wrench at the end-effector (index model.dof + 1), then
+        // walk back assembling Coriolis + inertial + child wrenches per link
+        // and project onto the screw axis to recover joint torques.
         data.rnea.f_links[model.dof + 1] = ee_wrench;
 
         for (int i = model.dof - 1; i >= 0; --i) {
             int link_idx = i + 1;
             int child_idx = i + 2;
 
-            // Compute Coriolis Wrench
             auto ad_V_T = manifold::SE3::ad(data.rnea.v_links[link_idx]).transpose();
             manifold::SE3::Wrench F_coriolis(ad_V_T * model.spatial_inertias_link[i] *
                                              data.rnea.v_links[link_idx]);
 
-            // Compute Inertial Wrench
             manifold::SE3::Wrench F_inertial(model.spatial_inertias_link[i] *
                                              data.rnea.a_links[link_idx]);
 
-            // Project Child Wrench to Current Link Frame
             auto Ad_T_child = data.rnea.T_i_parent_cache[i + 1].Ad();
             manifold::SE3::Wrench F_child_pulled_back =
                 Ad_T_child.transpose() * data.rnea.f_links[child_idx];
 
-            // Compute Total Wrench on Link i
             data.rnea.f_links[link_idx] = F_child_pulled_back + F_inertial - F_coriolis;
-
-            // Extract Joint Torques
             data.tau_out[i] = data.rnea.f_links[link_idx].dot(model.screw_axes_local[i]);
         }
     }
@@ -109,36 +99,31 @@ namespace xarm_geo {
                "pose_tree_local not populated; run forward_kinematics first");
 
         // Composite Rigid Body Algorithm (Featherstone), body-frame variant.
-        // Convention: joint i drives link i+1; link k's parent is link k-1.
-        // Requires pose_tree_local to be up-to-date (call forward_kinematics
-        // or compute_jacobians first). M is symmetric by construction.
+        // Joint i drives link i+1; link k's parent is link k-1. Requires
+        // pose_tree_local to be fresh (forward_kinematics or compute_jacobians).
+        // M is symmetric by construction.
 
         const int dof = model.dof;
 
-        // Cache Child-to-Parent Transforms (Index k-1 -> link k frame to link k-1 frame)
         for (int k = 1; k <= dof; ++k) {
             data.rnea.T_i_parent_cache[k - 1] = data.pose_tree_local[k].inverse();
         }
 
-        // Seed Composite Inertias w/ Each Link's Spatial Inertia
         for (int i = 0; i < dof; ++i) { data.crba.I_C[i] = model.spatial_inertias_link[i]; }
 
-        // Leaves-to-Base Composite-Inertia Accumulation
-        // I_C[parent] += Ad^T * I_C[child] * Ad
+        // Leaves-to-base composite-inertia accumulation: I_C[parent] += Ad^T * I_C[child] * Ad.
         for (int k = dof; k >= 2; --k) {
             const auto Ad = data.rnea.T_i_parent_cache[k - 1].Ad();
             data.crba.I_C[k - 2].noalias() += Ad.transpose() * data.crba.I_C[k - 1] * Ad;
         }
 
-        // Write Columns of M (Wrench F = I_C[i+1] * S_i, transported up the chain)
+        // Columns of M: F = I_C[i] * S_i transported up the chain and dotted with each ancestor.
         data.M.setZero();
         for (int i = 0; i < dof; ++i) {
             data.crba.F_scratch.noalias() = data.crba.I_C[i] * model.screw_axes_local[i];
 
-            // Diagonal Entry
             data.M(i, i) = data.crba.F_scratch.dot(model.screw_axes_local[i]);
 
-            // Off-Diagonals: Transport F up the chain, dot w/ each ancestor's screw
             for (int j = i; j >= 1; --j) {
                 const auto Ad_T = data.rnea.T_i_parent_cache[j].Ad().transpose();
                 data.crba.F_scratch = Ad_T * data.crba.F_scratch;
@@ -156,24 +141,16 @@ namespace xarm_geo {
 
         assert(v.size() == model.dof && "v size must equal model.dof");
 
-        // Evaluating the Inverse Dynamics w/ Zero Joint Accelerations
-        // The equation simplifies to: tau = h(q, v)
-        // (h includes gravity when `model.gravity` is non-zero)
+        // Inverse dynamics with a = 0 gives tau = h(q, v) (includes gravity when nonzero).
         inverse_dynamics(model, data, v, data.bias.a_zero, ee_wrench);
-
-        // Store resulting Joint Torques as the Bias Forces `h`
         data.h = data.tau_out;
     };
 
     void compute_gravity_forces(const Model &model, Data &data) {
 
-        // Inverse dynamics with zero velocity AND zero acceleration:
-        //   tau = M(q) * 0 + C(q, 0) * 0 + g(q) = g(q).
-        // Reuses `data.bias.a_zero` as both the v and a argument to avoid
-        // allocating a second zero-vector.
+        // Inverse dynamics with v = 0 and a = 0 gives tau = g(q).
+        // Reuses bias.a_zero as both arguments to avoid an extra zero vector.
         inverse_dynamics(model, data, data.bias.a_zero, data.bias.a_zero);
-
-        // Store resulting Joint Torques as the Gravity Forces `g`
         data.g = data.tau_out;
     };
 
@@ -186,34 +163,24 @@ namespace xarm_geo {
         assert(v_b.size() == model.dof && "v_b size must equal model.dof");
         assert(out.size() == model.dof && "out size must equal model.dof");
 
-        // --- Polarisation Identity (Symmetric Levi-Civita Form) ---
-        //
-        //   2 * C(q, v_a) * v_b
-        //     = RNEA(q, v_a + v_b, 0) - RNEA(q, v_a, 0) - RNEA(q, v_b, 0) + g(q)
-        //
-        // Each RNEA(q, v, 0) returns C(q, v) * v + g(q); the four-way
-        // combination cancels the three g(q) contributions and isolates the
-        // symmetric cross term 2 * C(q, v_a) * v_b.
+        // Polarisation identity for the symmetric Levi-Civita form:
+        //   2 * C(q, v_a) * v_b = RNEA(q, v_a+v_b, 0) - RNEA(q, v_a, 0) - RNEA(q, v_b, 0) + g(q).
+        // Each RNEA(q, v, 0) returns C(q, v) * v + g(q); the combination
+        // cancels the three g(q) terms and isolates 2 * C(q, v_a) * v_b.
 
-        // 1) RNEA(q, v_a, 0) -> data.coriolis.b_a
         inverse_dynamics(model, data, v_a, data.bias.a_zero);
         data.coriolis.b_a = data.tau_out;
 
-        // 2) RNEA(q, v_b, 0) -> data.coriolis.b_b
         inverse_dynamics(model, data, v_b, data.bias.a_zero);
         data.coriolis.b_b = data.tau_out;
 
-        // 3) RNEA(q, v_a + v_b, 0) -> data.coriolis.b_sum
         data.coriolis.v_sum = v_a + v_b;
         inverse_dynamics(model, data, data.coriolis.v_sum, data.bias.a_zero);
         data.coriolis.b_sum = data.tau_out;
 
-        // 4) g(q) -> data.g
-        // Skip the recompute if the caller has already populated data.g at
-        // the current data.q (drops 4 RNEA -> 3 RNEA per call).
+        // Skip the gravity recompute when the caller has already populated data.g (4 -> 3 RNEA).
         if (!g_fresh) { compute_gravity_forces(model, data); }
 
-        // Combine: out = 0.5 * (b_sum - b_a - b_b + g)
         out.noalias() =
             0.5 * (data.coriolis.b_sum - data.coriolis.b_a - data.coriolis.b_b + data.g);
     };

@@ -7,18 +7,14 @@
 
 namespace xarm_geo {
 
-    // --- AdmittanceLayer ---
+    // --- Admittance Layer ---
     //
-    // Stateless joint-space admittance: v = D_v^{-1} * tau.
+    // Stateless joint-space torque-to-velocity map: v = D_v^{-1} * tau.
+    // No reference, no state, no safety -- compose with asif_filter or an
+    // equivalent upstream layer if those guarantees are required.
     //
-    // This is a translation layer, not a controller. It performs ONLY the torque-to-velocity
-    // mapping; it is memoryless, takes no reference, and carries no state. Position-limit safety,
-    // collision avoidance, and torque certification are NOT performed here -- compose with
-    // asif_filter (or an equivalent upstream layer) if those guarantees are required.
-    //
-    // The model-aware apply overload additionally enforces
-    // |v_i| <= model.limits[i].q_vel_max via direction-preserving rescale,
-    // mirroring the style of inverse_diff_kinematics in src/modelling/kinematics.cpp.
+    // The model-aware apply() overload additionally enforces
+    // |v_i| <= model.limits[i].q_vel_max via direction-preserving rescale.
 
     class AdmittanceLayer {
     public:

@@ -8,7 +8,7 @@
 
 namespace xarm_geo {
 
-    // --- PositionBarrier ---
+    // --- Joint Position Barrier ---
     //
     // For each joint i (rows 2*i, 2*i+1):
     //   Row 2*i:   +dq_i / dt <= alpha * (q_max_i - q_i - margin)
@@ -41,7 +41,7 @@ namespace xarm_geo {
         }
     }
 
-    // --- CollisionBarrier ---
+    // --- Collision Barrier ---
     //
     // For each collision pair k (one row per pair):
     //   h_k     = d_k - activation_distance
@@ -92,7 +92,7 @@ namespace xarm_geo {
         }
     }
 
-    // --- DynPositionBarrier ---
+    // --- Dynamic Position Barrier ---
 
     void DynPositionBarrier::compute_torque_constraint(const Model &model, Data &data,
                                                        const CollisionModel * /*col_model*/,
@@ -135,7 +135,7 @@ namespace xarm_geo {
         return h_min;
     }
 
-    // --- DynVelocityBarrier ---
+    // --- Dynamic Velocity Barrier ---
 
     void DynVelocityBarrier::compute_torque_constraint(const Model &model, Data &data,
                                                        const CollisionModel * /*col_model*/,
@@ -180,7 +180,7 @@ namespace xarm_geo {
         return h_min;
     }
 
-    // --- DynCollisionBarrier ---
+    // --- Dynamic Collision Barrier ---
 
     void DynCollisionBarrier::compute_torque_constraint(const Model &model, Data &data,
                                                         const CollisionModel *col_model,
@@ -221,9 +221,8 @@ namespace xarm_geo {
 
             const Eigen::RowVectorXd J_h = n.transpose() * (J_p2 - J_p1);
 
-            // Approximation: drops the J_h_dot * v term in ḧ. Standard
-            // manipulator-CBF approximation; alpha_0 / alpha_1 must be tuned
-            // conservatively to absorb its effect.
+            // Standard manipulator-CBF approximation: drops the J_h_dot * v term in ḧ.
+            // alpha_0 / alpha_1 must be tuned conservatively to absorb its effect.
             A.row(k) = -(J_h * M_inv);
 
             const double h_k = d_k - activation_distance;
@@ -240,7 +239,7 @@ namespace xarm_geo {
 
         if (col_data == nullptr) { return std::numeric_limits<double>::infinity(); }
 
-        // Caller has already refreshed col_data at the candidate q.
+        // Assumes the caller has refreshed col_data at the candidate q.
         double h_min = std::numeric_limits<double>::infinity();
         for (int k = 0; k < num_pairs; ++k) {
             const double d_k = col_data->distance_results[k].min_distance;

@@ -15,9 +15,9 @@ namespace xarm_geo {
 
         // --- Helpers ---
 
-        // Ensure the OptIK ProxQP solver is sized for (n, m_eq, m_in). If the
-        // dimensions changed, reconstruct in place and reset the init flag;
-        // otherwise reuse to keep the warm-start path active.
+        // Ensure the ProxQP solver is sized for (n, m_eq, m_in). On dimension
+        // change, reconstruct and reset init; otherwise reuse to keep the
+        // warm-start path active.
         void ensure_qp(Data::OptIKWorkspace &ws, int n, int m_eq, int m_in) {
             if (ws.qp == nullptr || ws.current_n != n || ws.current_m_eq != m_eq ||
                 ws.current_m_in != m_in) {
@@ -29,11 +29,9 @@ namespace xarm_geo {
             }
         }
 
-        // Accumulate one Task's contribution into (H, g):
+        // Accumulate one task into (H, g):
         //   H += J^T * W^T W * J + lm_damping * I
         //   g -= J^T * W^T W * (alpha * e)
-        //
-        // J/e are pre-sized scratch views into data.optik.J_task / e_task.
         void accumulate_task(const Task &task, const Model &model, Data &data, Eigen::MatrixXd &H,
                              Eigen::VectorXd &g, Eigen::MatrixXd &J_scratch,
                              Eigen::VectorXd &e_scratch) {
@@ -41,7 +39,6 @@ namespace xarm_geo {
             const int rows = task.rows();
             const int dof = model.dof;
 
-            // Resize scratch only if necessary (avoids the allocation in steady-state)
             if (J_scratch.rows() < rows || J_scratch.cols() != dof) { J_scratch.resize(rows, dof); }
             if (e_scratch.size() < rows) { e_scratch.resize(rows); }
 
@@ -51,12 +48,10 @@ namespace xarm_geo {
             task.compute(model, data, J, e);
 
             if (task.weight.size() == rows) {
-                // Apply diagonal weighting: J_w = W * J,  e_w = W * e
                 const auto W = task.weight.asDiagonal();
                 H.noalias() += J.transpose() * W * W * J;
                 g.noalias() -= J.transpose() * W * W * (task.gain * e);
             } else {
-                // Unit weights
                 H.noalias() += J.transpose() * J;
                 g.noalias() -= J.transpose() * (task.gain * e);
             }
@@ -81,7 +76,7 @@ namespace xarm_geo {
         const int dof = model.dof;
         auto &ws = data.optik;
 
-        // Build cost matrices (H, g) from tasks.
+        // Cost matrices.
         ws.H.setZero(dof, dof);
         ws.g.setZero(dof);
 
@@ -90,17 +85,16 @@ namespace xarm_geo {
             accumulate_task(*task, model, data, ws.H, ws.g, ws.J_task, ws.e_task);
         }
 
-        // Tikhonov regularisation (strict PD for ProxQP stability).
+        // Tikhonov regularisation for strict PD.
         ws.H.diagonal().array() += opts.regularisation;
 
-        // Refresh collision pre-requisites if any barrier might need them.
-        // Barriers without collision needs simply ignore the populated col_data.
+        // Refresh collision pre-requisites; barriers without collision needs ignore col_data.
         if (col_model != nullptr && col_data != nullptr && !barriers.empty()) {
             update_geometry_poses(model, data, *col_model, *col_data);
             (void)compute_min_distance(*col_model, *col_data);
         }
 
-        // Count inequality rows.
+        // Inequality rows.
         int n_in = 0;
         for (const Constraint *c : constraints) {
             if (c != nullptr) { n_in += c->rows(); }
@@ -109,7 +103,7 @@ namespace xarm_geo {
             if (b != nullptr) { n_in += b->rows(); }
         }
 
-        // Assemble inequality matrices (A, l, u).
+        // Assemble (A, l, u).
         if (n_in > 0) {
             if (ws.A.rows() != n_in || ws.A.cols() != dof) {
                 ws.A.resize(n_in, dof);
@@ -118,7 +112,7 @@ namespace xarm_geo {
             }
             ws.A.setZero();
 
-            // Constraints (hard, two-sided): l_c <= G_c dq <= u_c.
+            // Constraints (hard, two-sided): l_c <= G_c * dq <= u_c.
             int row = 0;
             for (const Constraint *c : constraints) {
                 if (c == nullptr) { continue; }
@@ -128,7 +122,7 @@ namespace xarm_geo {
                 row += r;
             }
 
-            // Barriers (one-sided): G_b dq <= b_b   ->   l = -inf, u = b_b.
+            // Barriers (one-sided): G_b * dq <= b_b  (l = -inf, u = b_b).
             for (const KinematicBarrier *b : barriers) {
                 if (b == nullptr) { continue; }
                 const int r = b->rows();
@@ -143,11 +137,10 @@ namespace xarm_geo {
             ws.u.resize(0);
         }
 
-        // Solve via ProxQP. First call -> init(); subsequent calls -> update()
-        // to reuse the factorisation/preconditioner.
+        // First call -> init(); subsequent calls -> update() (reuses factorisation).
         ensure_qp(ws, dof, /*m_eq=*/0, /*m_in=*/n_in);
 
-        // Empty equality-constraint placeholders (ProxQP requires correctly-sized args).
+        // Empty equality-constraint placeholders.
         Eigen::MatrixXd A_eq(0, dof);
         Eigen::VectorXd b_eq(0);
 
@@ -178,12 +171,8 @@ namespace xarm_geo {
 
         const auto status = ws.qp->results.info.status;
         if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
-            // Result is a joint-displacement dq over a step of length opts.dt.
-            if (opts.dt > 0.0) {
-                data.v_out = ws.qp->results.x / opts.dt;
-            } else {
-                data.v_out = ws.qp->results.x;
-            }
+            // QP solution is dq over a step of opts.dt; convert back to rad/s.
+            data.v_out = (opts.dt > 0.0) ? (ws.qp->results.x / opts.dt) : ws.qp->results.x;
             return OptimalIKStatus::OK;
         }
         if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_PRIMAL_INFEASIBLE ||
@@ -198,19 +187,12 @@ namespace xarm_geo {
 
     // --- Convenience Overloads (Default Safety Set) ---
     //
-    // Build the default task list (a single TwistTask or FrameTask) plus the
-    // default safety set:
-    //   - VelocityLimit    (hard joint-velocity bound)
-    //   - PositionLimit    (hard joint-position bound, linearised over dt)
-    //   - CollisionBarrier (one CBF row per pair in col_model.collision_pairs)
-    // and forward to the composable solver.
-    //
-    // The soft PositionBarrier is intentionally NOT in the default set
-    // (redundant with the hard PositionLimit). Users wanting graceful
-    // slow-down should drop down to the composable API.
+    // Builds a single TwistTask or FrameTask plus VelocityLimit, PositionLimit
+    // and CollisionBarrier, then forwards to the composable solver. The soft
+    // PositionBarrier is intentionally omitted (redundant with PositionLimit);
+    // users wanting graceful slow-down should call the composable API.
 
     namespace {
-        // CollisionBarrier defaults; users tune via the composable API.
         constexpr double CollisionActivationDistance = 0.05;  // metres
         constexpr double CollisionBarrierAlpha = 5.0;
         constexpr double CollisionBarrierMargin = 0.0;
@@ -284,25 +266,23 @@ namespace xarm_geo {
             data.q_out = data.q_guess;
 
             for (int iter = 0; iter < opts.max_iters; ++iter) {
-                // Sync canonical state to current iterate, then refresh kinematics.
                 data.q = data.q_out;
                 compute_jacobians(model, data);
 
-                // Convergence check (body-frame pose error, right-minus on SE(3)).
+                // Right-minus body-frame pose error.
                 const manifold::SE3::Twist V_err = target_pose - data.ee_pose;
                 if (V_err.norm() < opts.tolerance) {
-                    // Post-solve collision sanity check (CollisionBarrier already
-                    // enforces avoidance inside the QP; this catches edge cases).
+                    // Sanity check: CollisionBarrier already enforced avoidance inside the QP.
                     update_geometry_poses(model, data, col_model, col_data);
                     if (!compute_collisions(col_model, col_data)) { return true; }
-                    break;  // Collision at converged pose -> next restart.
+                    break;  // Collision at the converged pose -> next restart.
                 }
 
                 const auto status = optimal_inverse_diff_kinematics(
                     model, data, &col_model, &col_data, tasks, constraints, barriers, opts);
                 if (status != OptimalIKStatus::OK) { break; }
 
-                // Composable solver returns velocity (rad/s); integrate over step_dt.
+                // Composable solver returns rad/s; integrate over step_dt.
                 data.q_out += data.v_out * step_dt;
 
                 for (int i = 0; i < model.dof; ++i) {
@@ -313,7 +293,7 @@ namespace xarm_geo {
                 }
             }
 
-            // Per-Joint Random Restart for the Next Attempt
+            // Random per-joint restart.
             for (int i = 0; i < model.dof; ++i) {
                 std::uniform_real_distribution<> dis(model.limits[i].q_min, model.limits[i].q_max);
                 data.q_guess[i] = dis(data.rng);

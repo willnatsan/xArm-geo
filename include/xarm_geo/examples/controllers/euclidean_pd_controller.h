@@ -14,41 +14,27 @@
 
 namespace xarm_geo::controllers {
 
-    // --- Example: Euclidean PD Controller (Dynamic, Task-Space, NON-GEOMETRIC BASELINE) ---
+    // --- Euclidean PD Controller (Non-Geometric Baseline) ---
     //
-    // Textbook "naive" baseline provided as a contrast point against
-    // `GeometricPDController`. NOT recommended for production use.
+    // Dynamic, task-space. Textbook naive baseline provided as a contrast
+    // point against GeometricPDController -- not recommended for production.
     //
     // The control law is intentionally non-geometric:
+    //   - World-frame position error e_p = p_d - p.
+    //   - Orientation error as a ZYX-Euler difference (singular at
+    //     pitch = +-pi/2; gimbal lock is NOT handled).
+    //   - Velocity error as a raw 6-vector difference (no Ad-transport of
+    //     the reference into the current EE frame).
+    //   - Optional feedforward F_FF = Lambda_w * a_d with no ad^* coupling
+    //     term, so the FF residual does NOT vanish at perfect tracking.
     //
-    //   - Position error in WORLD frame: e_p = p_d - p.
-    //   - Orientation error as a difference of ZYX Euler angles (RPY):
-    //     e_rpy = wrap_to_pi(rpy_d - rpy). Singular parameterisation;
-    //     gimbal lock at pitch = +- pi/2 is NOT handled.
-    //   - Velocity error: e_v = xi_d - xi, with BOTH treated as ordinary
-    //     6-vectors in world frame (linear + spatial-angular). No
-    //     Ad-transport of the reference into the current EE frame.
-    //   - Feedforward (when enabled): naive operational-space inertia
-    //     coupling F_FF = Lambda_w * a_d, with NO ad^* correction term.
-    //     The Maithripala FF residual therefore does NOT vanish at perfect
-    //     tracking; passivity is NOT preserved.
-    //
-    // Frame interop note:
-    //
-    //   The control law produces a space-frame wrench F_w. The
-    //   DynamicTaskControllerBase pipeline expects a BODY-frame wrench
-    //   (it projects via J_b^T to obtain joint torques). We therefore
-    //   apply a single co-tangent transport at the end:
-    //
-    //       F_b = Ad_g^T * F_w
-    //
-    //   This is a pure frame change (virtual work is frame-invariant:
-    //   J_b^T * F_b = J_s^T * F_w). It is NOT part of the control law.
+    // The hook returns a body-frame wrench (the base projects via J_b^T);
+    // we compute F_w first and apply a single co-tangent transport
+    // F_b = Ad_g^T * F_w at the end (a frame change, not control logic).
 
     class EuclideanPDController final : public DynamicTaskControllerBase {
     public:
-        // Default bias-compensation policy chosen to mirror GeometricPDController, so the
-        // A/B comparison varies only the control law.
+        // Mirrors GeometricPDController so the A/B comparison varies only the control law.
         static constexpr BiasCompensation kRecommendedBiasCompensation = BiasCompensation::Full;
 
         explicit EuclideanPDController(const Model &model)
@@ -60,9 +46,8 @@ namespace xarm_geo::controllers {
         }
 
         // --- Public Configuration ---
-        // Matches GeometricPDController's `gains` surface; kp_pos, kp_rot, kd_lin, kd_ang used.
         SE3FeedbackGains gains;
-        bool use_feedforward = true;  // Naive op-space inertial FF (no ad^* coupling)
+        bool use_feedforward = true;
 
     protected:
         auto compute_command_wrench(const Model & /*model*/, Data & /*data*/, KinematicsCache &kin,
@@ -84,34 +69,19 @@ namespace xarm_geo::controllers {
 
             // --- World-Frame Velocity Error ---
             //
-            // Current spatial twist: xi_w = J_s * v. We work via Ad on the body
-            // twist (avoids reading data.space_jacobian inside a hook):
-            //     xi_w = Ad_g * (J_b * v)
+            // xi_w = Ad_g * (J_b * v); avoids reading data.space_jacobian inside the hook.
+            // The reference twist is taken as a raw space-frame 6-vector (no Ad-transport).
             const manifold::SE3::Twist body_twist = kin.body_jacobian() * ctx.fb.v;
             const manifold::SE3::Twist xi_w = g.Ad() * body_twist;
-
-            // The reference twist is treated naively as a space-frame twist:
-            // raw 6-vector (v_lin_ref ; omega_ref) with no Ad-transport.
             const manifold::SE3::Twist &xi_d_w = ctx.ref.twist;
 
-            // Velocity error: linear component in world frame, angular
-            // component as a spatial omega error (mapped from the RPY-rate
-            // command path, *not* via the orientation error gradient).
             const Eigen::Vector3d e_vel_lin = xi_d_w.head<3>() - xi_w.head<3>();
             const Eigen::Vector3d e_vel_ang = xi_d_w.tail<3>() - xi_w.tail<3>();
 
-            // --- P + D Wrench (Space Frame) ---
+            // --- Space-Frame PD Wrench ---
             //
-            // F_w_lin = Kp_pos * e_pos   + Kd_lin * e_vel_lin
-            // F_w_ang = Kp_rot * e_rpy_w + Kd_ang * e_vel_ang
-            //
-            // Crucially, the angular Kp acts on the (singular) Euler-angle
-            // error e_rpy directly, not on a Lie-algebra element. This is the
-            // textbook formulation and the source of the gimbal-lock pitfall.
-            //
-            // The angular error is mapped to a space-frame torque axis by
-            // E(rpy) so the units of the wrench are consistent: torque about
-            // world axes.
+            // Kp_rot acts on the singular Euler-angle error e_rpy (gimbal-lock pitfall);
+            // map to a space-frame torque via E(rpy) for unit-consistent wrenches.
             const Eigen::Vector3d kp_rpy = gains.kp_rot.cwiseProduct(e_rpy);
             const Eigen::Vector3d kp_rpy_w = rpy_rate_to_spatial_omega(rpy, kp_rpy);
 
@@ -121,16 +91,10 @@ namespace xarm_geo::controllers {
 
             // --- Optional Naive Inertial Feedforward ---
             //
-            // F_FF = Lambda_w(q) * a_d_w
-            //
-            // where Lambda_w = ( J_s * M^-1 * J_s^T )^{-1} is the
-            // operational-space inertia in world frame. We compute J_s via
-            // J_s = Ad_g * J_b to avoid touching data.space_jacobian inside
-            // the hook.
-            //
-            // NOTE: NO ad_{xi_e}^* * Lambda * xi_d term. The geometric variant
-            // includes this so the FF residual vanishes at perfect tracking;
-            // omitting it is exactly what makes this baseline "naive".
+            // F_FF = Lambda_w(q) * a_d_w  with  Lambda_w = (J_s M^-1 J_s^T)^{-1}.
+            // Compute J_s = Ad_g * J_b to avoid touching data.space_jacobian.
+            // No ad_{xi_e}^* * Lambda * xi_d coupling term -- that's what makes
+            // this baseline "naive"; the geometric variant adds it back.
             if (use_feedforward) {
                 M_llt_.compute(dyn.M());
                 if (M_llt_.info() == Eigen::Success) {
@@ -140,32 +104,27 @@ namespace xarm_geo::controllers {
                     lambda_w_.noalias() = J_s * M_inv_Jst_;
                     lambda_w_ = lambda_w_.inverse().eval();
 
-                    // a_d_w: raw 6-vector reference spatial acceleration. No
-                    // se3_transported_acc -- by design.
+                    // Raw 6-vector reference spatial acceleration; no se3_transported_acc.
                     F_w.noalias() += lambda_w_ * ctx.ref.spatial_acc;
                 } else {
                     debug::log("EuclideanPDController: Cholesky failed on M(q); FF dropped");
                 }
             }
 
-            // --- Frame Change to Body Frame for the Base Pipeline ---
-            //
-            // F_b = Ad_g^T * F_w. Co-tangent transport; not part of the control law.
+            // Frame change for the base pipeline: F_b = Ad_g^T * F_w (not part of the law).
             cmd_wrench = g.Ad().transpose() * F_w;
             return true;
         }
 
     private:
-        // --- Per-Tick Scratch (Pre-Allocated at Construction) ---
+        // --- Pre-Allocated Per-Tick Scratch ---
         Eigen::LLT<Eigen::MatrixXd> M_llt_;
         Eigen::MatrixXd M_inv_Jst_;             // (dof x 6)
-        Eigen::Matrix<double, 6, 6> lambda_w_;  // Operational-space inertia (world frame)
+        Eigen::Matrix<double, 6, 6> lambda_w_;  // operational-space inertia (world frame)
 
-        // --- ZYX-Euler Helpers (File-Local, Match `EuclideanPController`) ---
+        // --- ZYX-Euler Helpers (File-Local) ---
         //
-        // Duplicated rather than shared, to keep each example header
-        // self-contained (matches how the geometric example controllers are
-        // also self-contained).
+        // Duplicated across example headers so each one stays self-contained.
 
         static auto so3_to_rpy_zyx(const Eigen::Matrix3d &R) noexcept -> Eigen::Vector3d {
             const double pitch = std::asin(std::clamp(-R(2, 0), -1.0, 1.0));

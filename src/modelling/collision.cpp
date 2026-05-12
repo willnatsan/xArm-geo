@@ -27,7 +27,7 @@ namespace xarm_geo {
                 const auto &g1 = geometries[i];
                 const auto &g2 = geometries[j];
 
-                // Check the Allowed Collision Matrix
+                // Skip explicitly allowed pairs.
                 if (allowed_collision_pairs.contains({g1.name, g2.name}) ||
                     allowed_collision_pairs.contains({g2.name, g1.name})) {
                     continue;
@@ -36,10 +36,8 @@ namespace xarm_geo {
                 int joint_i = static_cast<int>(g1.parent_joint);
                 int joint_j = static_cast<int>(g2.parent_joint);
 
-                // Ignore Static Environment
+                // Skip static-environment and adjacent-link pairs.
                 if (joint_i == 0 && joint_j == 0) { continue; }
-
-                // Ignore Adjacent Links
                 if (std::abs(joint_i - joint_j) <= 1) { continue; }
 
                 collision_pairs.push_back({.obj1_idx = i, .obj2_idx = j});
@@ -58,14 +56,11 @@ namespace xarm_geo {
 
         geom_poses.resize(num_geoms, manifold::SE3::Identity());
 
-        // Initialise Collision Objects
         for (const auto &obj : col_model.geometries) { collision_objects.emplace_back(obj.geom); }
 
-        // Pre-Allocate Collision Requests & Results for Every Collision Pair
+        // Pre-allocate per-pair requests/results for both collision and distance queries.
         collision_requests.resize(num_pairs);
         collision_results.resize(num_pairs);
-
-        // Pre-Allocate Distance Requests & Results for Every Collision Pair
         distance_requests.resize(num_pairs);
         distance_results.resize(num_pairs);
     }
@@ -77,10 +72,9 @@ namespace xarm_geo {
         for (size_t i = 0; i < col_model.geometries.size(); ++i) {
             const auto &obj = col_model.geometries[i];
 
-            // If parent is 0 (World), kin_data.pose_tree[0] should be Identity.
+            // parent_joint == 0 (world) => pose_tree[0] is Identity.
             col_data.geom_poses[i] = kin_data.pose_tree[obj.parent_joint] * obj.pose;
 
-            // Update the Collision Objects
             coal::Transform3s transform(col_data.geom_poses[i].so3().matrix(),
                                         col_data.geom_poses[i].r3());
             col_data.collision_objects[i].setTransform(transform);
@@ -93,10 +87,7 @@ namespace xarm_geo {
         for (size_t i = 0; i < col_model.collision_pairs.size(); ++i) {
             const auto &pair = col_model.collision_pairs[i];
 
-            // Clear previous Collision Result for this Collision Pair
             col_data.collision_results[i].clear();
-
-            // Collision Detection
             coal::collide(&col_data.collision_objects[pair.obj1_idx],
                           &col_data.collision_objects[pair.obj2_idx],
                           col_data.collision_requests[i], col_data.collision_results[i]);
@@ -116,10 +107,7 @@ namespace xarm_geo {
         for (size_t i = 0; i < col_model.collision_pairs.size(); ++i) {
             const auto &pair = col_model.collision_pairs[i];
 
-            // Clear previous Distance Result for this Collision Pair
             col_data.distance_results[i].clear();
-
-            // Distance Computation
             coal::distance(&col_data.collision_objects[pair.obj1_idx],
                            &col_data.collision_objects[pair.obj2_idx],
                            col_data.distance_requests[i], col_data.distance_results[i]);

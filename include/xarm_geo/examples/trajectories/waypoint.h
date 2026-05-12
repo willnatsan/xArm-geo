@@ -9,11 +9,10 @@
 
 namespace xarm_geo::trajectories {
 
-    // --- Example: Waypoint Trajectory (Task-Space) ---
+    // --- Waypoint Trajectory ---
     //
-    // Reference implementation of a task-space trajectory that interpolates
-    // through a user-supplied list of SE(3) waypoints using a degree-5
-    // B-spline.
+    // Task-space trajectory interpolating a list of SE(3) waypoints via a
+    // degree-5 B-spline.
 
     class Waypoint {
     public:
@@ -26,8 +25,7 @@ namespace xarm_geo::trajectories {
             manifold::SE3::Tangent vel;
             manifold::SE3::Tangent acc;
 
-            // Using Analytical Derivatives from `smooth` to get Body Twist & Body Spatial
-            // Acceleration.
+            // smooth's analytical spline derivatives give body twist and spatial acceleration.
             target.pose = spline_(t, smooth::OptTangent<manifold::SE3>{vel},
                                   smooth::OptTangent<manifold::SE3>{acc});
             target.twist = vel;

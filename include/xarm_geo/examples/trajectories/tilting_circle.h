@@ -10,7 +10,7 @@
 
 namespace xarm_geo::trajectories {
 
-    // --- Example: Tilting Circle Trajectory (Task-Space) ---
+    // --- Tilting Circle Trajectory ---
     //
     // Circular orbit in the XY plane that smoothly transitions from
     // horizontal to vertical at the trajectory midpoint via a min-jerk tilt

@@ -11,9 +11,10 @@ namespace xarm_geo {
     enum class InterfaceStatus : std::uint8_t { OK, ERROR };
 
     // --- Interface Concepts ---
+    //
+    // Initialisation is by RAII; there is no dedicated init() hook.
 
-    // Base Interface: Lifecycle Management + State Reading (JointState)
-    // Note: No Dedicated `init()` Method -> Assuming RAII (Initialisation in Constructor)
+    // Lifecycle + JointState reading.
     template <typename T>
     concept Interface = requires(T interface, JointState &state) {
         { interface.is_running() } -> std::same_as<bool>;
@@ -22,7 +23,7 @@ namespace xarm_geo {
         { interface.read_time() } noexcept -> std::same_as<std::chrono::nanoseconds>;
     };
 
-    // Extends Interface w/ Command Writing (JointPosition | JointVelocity | JointTorque) Capability
+    // Extends Interface with command writing (JointPosition / JointVelocity / JointTorque).
     template <typename T, typename J>
     concept Controllable = Interface<T> && JointCommand<J> && requires(T interface, const J &cmd) {
         { interface.write(cmd) } noexcept -> std::same_as<InterfaceStatus>;

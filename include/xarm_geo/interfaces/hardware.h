@@ -11,27 +11,27 @@ namespace xarm_geo {
     class Hardware {
 
     public:
-        // --- Direct Access (If Needed) ---
+        // --- Direct SDK Access ---
 
         std::unique_ptr<XArmAPI> arm;
 
-        // --- Constructors & Destructors ---
+        // --- Constructors & Destructor ---
 
         explicit Hardware(int dof, const std::string &robot_ip);
         ~Hardware();
 
-        // --- Concept: Interface (Lifecycle Management & State Reading) ---
+        // --- Interface Concept: Lifecycle & State Reading ---
 
         [[nodiscard]] auto is_running() const -> bool;
         void shutdown();
         auto read(JointState &state) noexcept -> InterfaceStatus;
         [[nodiscard]] auto read_time() const noexcept -> std::chrono::nanoseconds;
 
-        // --- Concept: Controllable (Command Writing) ---
+        // --- Controllable Concept: Command Writing ---
 
         auto write(const JointVelocity &cmd) noexcept -> InterfaceStatus;
 
-        // --- Additional Utility Methods ---
+        // --- Utility ---
 
         void stop();
         void disable_motors();

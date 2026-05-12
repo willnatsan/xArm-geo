@@ -7,7 +7,7 @@
 
 namespace xarm_geo {
 
-    // --- AnalyticTaskTrajectory ---
+    // --- Analytic Task Trajectory Base Class ---
 
     AnalyticTaskTrajectory::AnalyticTaskTrajectory(manifold::SE3 anchor, double duration,
                                                    int num_samples)
@@ -52,7 +52,7 @@ namespace xarm_geo {
 
     auto AnalyticTaskTrajectory::duration() const noexcept -> double { return duration_; }
 
-    // --- AnalyticJointTrajectory ---
+    // --- Analytic Joint Trajectory Base Class ---
 
     AnalyticJointTrajectory::AnalyticJointTrajectory(int dof, double duration, int num_samples)
         : dof_(dof), duration_(duration), num_samples_(num_samples) {
@@ -66,7 +66,6 @@ namespace xarm_geo {
     }
 
     void AnalyticJointTrajectory::build_spline() {
-        // Collect sample matrix: each column is a joint configuration q(t_i).
         // Eigen::SplineFitting expects points as columns of a (dof x num_samples) matrix.
         Eigen::MatrixXd pts(dof_, num_samples_);
 
@@ -84,9 +83,7 @@ namespace xarm_geo {
             pts.col(i) = q;
         }
 
-        // Build a uniform chord-length parameterisation scaled to [0, 1].
-        // Eigen::SplineFitting::Interpolate works in the parameter domain [0,1];
-        // we store duration_ and scale t to [0,1] on evaluate().
+        // Uniform parameterisation in [0, 1]; evaluate() scales t -> u = t / duration_.
         Eigen::RowVectorXd params(num_samples_);
         for (int i = 0; i < num_samples_; ++i) {
             params(i) = static_cast<double>(i) / static_cast<double>(num_samples_ - 1);
@@ -104,21 +101,12 @@ namespace xarm_geo {
         if (!initialised_) { return TrajectoryStatus::NOT_INITIALISED; }
         if (t < 0.0 || t > duration_) { return TrajectoryStatus::OUT_OF_DOMAIN; }
 
-        // Normalise to [0,1] for the Eigen spline.
         const double u = t / duration_;
 
-        // derivatives(u, 2) returns a (dof x 3) matrix:
-        //   col 0 = q(u)
-        //   col 1 = dq/du
-        //   col 2 = d²q/du²
+        // derivatives(u, 2) columns: q, dq/du, d²q/du². Chain-rule to dt.
         const auto derivs = spline_.derivatives(u, 2);
-
         target.q = derivs.col(0);
-
-        // Chain rule: dq/dt = dq/du * (du/dt) = dq/du / duration_
         target.v = derivs.col(1) / duration_;
-
-        // d²q/dt² = d²q/du² * (du/dt)²
         target.a = derivs.col(2) / (duration_ * duration_);
 
         return TrajectoryStatus::OK;

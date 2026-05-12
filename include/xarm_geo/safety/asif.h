@@ -12,33 +12,27 @@ namespace xarm_geo {
 
     // --- Active-Set Invariance Filtering (ASIF) for Joint Torques ---
     //
-    // Takes a nominal torque tau_des and returns the closest tau_safe that,
-    // when applied through the dynamics  M(q) v_dot + h(q, v) = tau,  keeps
-    // the closed-loop trajectory inside the safe set defined by the supplied
-    // DynamicBarriers (see safety/barriers.h):
+    // Projects a nominal torque tau_des to the closest tau_safe that, applied
+    // through M(q) v_dot + h(q, v) = tau, keeps the closed-loop trajectory in
+    // the safe set defined by the supplied DynamicBarriers:
+    //   min_tau   0.5 (tau - tau_des)^T diag(W) (tau - tau_des) + reg ||tau||^2
+    //   s.t.      A_cbf tau <= b_cbf      (one block per DynamicBarrier)
+    //             tau_min  <= tau <= tau_max
     //
-    //     min_tau     0.5 (tau - tau_des)^T diag(W) (tau - tau_des) + reg ||tau||^2
-    //     s.t.        A_cbf tau <= b_cbf       (one block per DynamicBarrier)
-    //                 tau_min <= tau <= tau_max
-    //
-    // Solved via ProxQP. M^-1 is factorised once per call and reused by all
-    // barriers. The accompanying asif_validate() forward-simulates one step
-    // and checks the actual barrier values at the predicted next-state to
-    // catch QP linearisation errors.
+    // Solved with ProxQP; M^-1 is factorised once and reused across barriers.
+    // asif_validate() forward-simulates one step to catch QP linearisation errors.
 
     // --- ASIF Status & Options ---
 
     enum class ASIFStatus : std::uint8_t { OK, INFEASIBLE, MAX_ITERS, ERROR };
 
     struct ASIFOptions {
-        double regularisation = 1e-12;  // Tikhonov regulariser added to H diagonal
+        double regularisation = 1e-12;  // Tikhonov diagonal regulariser
         int max_iters_qp = 50;          // ProxQP inner iterations
-        bool warmstart = true;          // Reuse previous QP solution
+        bool warmstart = true;          // reuse previous QP solution
 
-        // Hard torque box bounds. Empty -> no torque bounds enforced.
-        // The convenience overload auto-populates these from
-        // model.limits[i].tau_max (symmetric: tau_min = -tau_max) when left
-        // empty by the caller.
+        // Hard torque box. Empty -> no torque bounds. The convenience overload
+        // auto-populates these from model.limits[i].tau_max (symmetric).
         Eigen::VectorXd tau_min;
         Eigen::VectorXd tau_max;
 
@@ -48,15 +42,11 @@ namespace xarm_geo {
 
     // --- Composable ASIF Filter ---
     //
-    // Pre-conditions:
-    //   - data.q is the current joint configuration.
-    //   - compute_jacobians(model, data) has been called.
-    //   - data.M and data.h are populated (compute_mass_matrix +
-    //     compute_bias_forces); the filter does NOT recompute these.
-    //
-    // Writes the filtered torque to `tau_safe`. If any barrier requires
-    // collision data, the caller must pass valid col_model/col_data AND
-    // have called update_geometry_poses + compute_min_distance beforehand.
+    // Pre-conditions: compute_jacobians, compute_mass_matrix, and
+    // compute_bias_forces have already been called for the current data.q;
+    // the filter does NOT recompute them. If any barrier needs collision
+    // data, the caller must also have run update_geometry_poses and
+    // compute_min_distance.
 
     auto asif_filter(const Model &model, Data &data, const CollisionModel *col_model,
                      CollisionData *col_data, const Eigen::Ref<const Eigen::VectorXd> &v,
@@ -67,11 +57,11 @@ namespace xarm_geo {
 
     // --- Convenience Overload (Default Safety Set) ---
     //
-    // Default barriers: DynPositionBarrier + DynVelocityBarrier +
-    // DynCollisionBarrier (alpha_0 = 25, alpha_1 = 10, activation_distance =
-    // 5 cm). Internally runs compute_mass_matrix, compute_bias_forces,
-    // update_geometry_poses, and compute_min_distance (the user is still
-    // expected to have called compute_jacobians beforehand).
+    // Installs DynPositionBarrier + DynVelocityBarrier + DynCollisionBarrier
+    // (alpha_0 = 25, alpha_1 = 10, activation_distance = 5 cm). Internally
+    // runs compute_mass_matrix, compute_bias_forces, update_geometry_poses,
+    // and compute_min_distance; the caller must still have run
+    // compute_jacobians beforehand.
 
     auto asif_filter(const Model &model, Data &data, const CollisionModel &col_model,
                      CollisionData &col_data, const Eigen::Ref<const Eigen::VectorXd> &v,
@@ -81,23 +71,18 @@ namespace xarm_geo {
 
     // --- Post-Solve Validator ---
     //
-    // Forward-simulates one step using tau_safe and the full nonlinear
-    // dynamics:
-    //     a      = M^-1 (tau_safe - h_bias)
-    //     v_next = v + a * dt
-    //     q_next = q + v * dt + 0.5 * a * dt^2
+    // Forward-simulates one step with the full nonlinear dynamics:
+    //   a      = M^-1 (tau_safe - h_bias)
+    //   v_next = v + a * dt
+    //   q_next = q + v * dt + 0.5 * a * dt^2
     //
-    // and evaluates each DynamicBarrier's `evaluate_at(q_next, v_next)`.
-    // Returns false if any h_min < -tolerance (caller falls back to a
-    // known-safe action, e.g. tau_safe = h_bias).
+    // and evaluates each barrier's evaluate_at(q_next, v_next). Returns false
+    // if any h_min < -tolerance (caller falls back to a known-safe action).
     //
-    // `live_data` is read-only; predicted kinematic / collision state is
-    // written into the user-supplied `scratch_data` and (optionally)
-    // `scratch_col_data`, which must be pre-allocated alongside the live
-    // instances. Scratch is left in an undefined state on exit. Reuses
-    // live_data.asif.M_llt (factorised by the most recent asif_filter call).
-    // `scratch_col_data` may be nullptr if no collision-using barrier is
-    // present.
+    // `live_data` is read-only; predicted state is written into the
+    // user-supplied scratch instances (left in an undefined state on exit).
+    // Reuses live_data.asif.M_llt from the most recent asif_filter call.
+    // `scratch_col_data` may be nullptr if no collision barrier is present.
 
     auto asif_validate(const Model &model, const Data &live_data, Data &scratch_data,
                        const CollisionModel *col_model, CollisionData *scratch_col_data,

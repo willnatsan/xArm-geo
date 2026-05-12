@@ -3,6 +3,7 @@
 #include <xarm_geo/control/controller.h>
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/system.h>
+#include <xarm_geo/diagnostics/logger.h>
 #include <xarm_geo/interfaces/hardware.h>
 #include <xarm_geo/interfaces/simulation.h>
 #include <xarm_geo/modelling/dynamics.h>

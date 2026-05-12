@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -22,6 +23,8 @@ namespace xarm_geo::trajectories {
 
     class TaskPTP final {
     public:
+        static constexpr std::string_view kName = "TaskPTP";
+
         TaskPTP(const manifold::SE3 &start, const manifold::SE3 &end, double duration)
             : start_(start), delta_((start_.inverse() * end).log()), duration_(duration) {}
 

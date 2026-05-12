@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <string_view>
 #include <utility>
 
 #include <xarm_geo/core/manifold.h>
@@ -20,6 +21,8 @@ namespace xarm_geo::trajectories {
 
     class TiltingCircle final : public AnalyticTaskTrajectory {
     public:
+        static constexpr std::string_view kName = "TiltingCircle";
+
         explicit TiltingCircle(const manifold::SE3 &anchor, double duration = 15.0,
                                double omega = 2.0, double R = 0.12)
             : AnalyticTaskTrajectory(anchor, duration), omega_(omega), R_(R) {

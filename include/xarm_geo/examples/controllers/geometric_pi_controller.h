@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <limits>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -27,6 +28,8 @@ namespace xarm_geo::controllers {
 
     class GeometricPIController final : public KinematicTaskControllerBase {
     public:
+        static constexpr std::string_view kName = "GeometricPIController";
+
         explicit GeometricPIController(const Model &model) : KinematicTaskControllerBase(model) {
             assert(model.dof > 0 && "GeometricPIController: model.dof must be > 0");
         }

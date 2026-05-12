@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xarm_geo_analysis"
+version = "0.1.0"
+description = "Data analysis and visualisation suite for xArm-geo trials"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+]
+
+[project.scripts]
+xarm-geo-analyse = "xarm_geo_analysis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# Block ROS 2 launch_testing from registering itself as a pytest plugin.
+# The system ROS Humble installation exposes a pytest11 entry-point that
+# tries to import launch_testing (Python 3.10 only), which fails under the
+# pixi Python 3.13 environment.
+addopts = "-p no:launch_testing -p no:launch_ros"

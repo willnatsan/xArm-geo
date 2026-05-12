@@ -1,11 +1,10 @@
-#include <format>
-#include <fstream>
 #include <iostream>
 #include <numbers>
 #include <stdexcept>
 #include <thread>
 
 #include <xarm_geo/core/system.h>
+#include <xarm_geo/diagnostics/logger.h>
 #include <xarm_geo/examples/controllers/euclidean_p_controller.h>
 #include <xarm_geo/examples/controllers/euclidean_pd_controller.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
@@ -89,7 +88,7 @@ template <xarm_geo::TaskTrajectory T>
 auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
                     xarm_geo::CollisionModel &col_model, xarm_geo::CollisionData &col_data,
                     xarm_geo::Simulation &sim, const T &trajectory, const Eigen::VectorXd &q_home,
-                    const TestParams &params) -> int {
+                    const TestParams &params, std::string_view traj_name) -> int {
 
     const double duration = trajectory.duration();
 
@@ -163,15 +162,6 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     std::cout << "\n[PHASE 2] Executing Task Space Trajectory...\n";
 
-    std::ofstream log_file;
-    if (params.log_data) {
-        std::string filename =
-            std::format("tests/results/trajectory_log_{}.csv", params.trajectory_mode);
-        log_file.open(filename);
-        log_file << "time,target_x,target_y,target_z,actual_x,actual_y,actual_z,"
-                 << "target_roll,target_pitch,target_yaw,actual_roll,actual_pitch,actual_yaw\n";
-    }
-
     std::cout << "Starting Simulation.\n"
               << "  Torque Mode: " << (params.torque_mode ? "ON" : "OFF") << "\n"
               << "  Geometric Mode: " << (params.geometric ? "ON" : "OFF") << "\n"
@@ -216,6 +206,28 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(physics_dt));
 
+    // Determine the active controller name for the trial filename.
+    const std::string_view controller_name =
+        params.torque_mode
+            ? (params.geometric ? xarm_geo::controllers::GeometricPDController::kName
+                                : xarm_geo::controllers::EuclideanPDController::kName)
+            : (params.geometric ? xarm_geo::controllers::GeometricPController::kName
+                                : xarm_geo::controllers::EuclideanPController::kName);
+
+    // DataLogger is constructed (and pre-allocated) before the loop;
+    // the destructor flushes to disk automatically after Phase 2 ends.
+    std::optional<xarm_geo::diagnostics::DataLogger> logger;
+    if (params.log_data) {
+        const std::string trial_name = xarm_geo::diagnostics::make_trial_name(
+            "sim", controller_name, traj_name, params.constraint_aware, params.feedforward);
+
+        logger.emplace(model, xarm_geo::diagnostics::DataLogger::Config{
+                                  .output_path = "tests/results/" + trial_name + ".csv",
+                                  .trial_name = trial_name,
+                              });
+    }
+
+    std::int64_t tick = 0;
     while (t < duration && sim.is_running()) {
         if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { break; }
 
@@ -223,12 +235,14 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
         const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
 
+        xarm_geo::ControllerStatus ctrl_status = xarm_geo::ControllerStatus::OK;
+
         if (params.torque_mode) {
             // Dynamic Mode: (Geometric|Euclidean)PDController -> JointTorque.
-            const auto status = params.geometric
-                                    ? pd_controller.update(model, data, ctx, torque_target)
-                                    : pd_baseline.update(model, data, ctx, torque_target);
-            if (status != xarm_geo::ControllerStatus::OK) {
+            ctrl_status = params.geometric ? pd_controller.update(model, data, ctx, torque_target)
+                                           : pd_baseline.update(model, data, ctx, torque_target);
+
+            if (ctrl_status != xarm_geo::ControllerStatus::OK) {
                 std::cerr << (params.geometric ? "GeometricPDController" : "EuclideanPDController")
                           << " update failed.\n";
                 break;
@@ -236,10 +250,10 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
             if (sim.write(torque_target) != xarm_geo::InterfaceStatus::OK) { break; }
         } else {
             // Kinematic Mode: (Geometric|Euclidean)PController -> JointVelocity.
-            const auto status = params.geometric
-                                    ? p_controller.update(model, data, ctx, control_target)
-                                    : p_baseline.update(model, data, ctx, control_target);
-            if (status != xarm_geo::ControllerStatus::OK) {
+            ctrl_status = params.geometric ? p_controller.update(model, data, ctx, control_target)
+                                           : p_baseline.update(model, data, ctx, control_target);
+
+            if (ctrl_status != xarm_geo::ControllerStatus::OK) {
                 std::cerr << (params.geometric ? "GeometricPController" : "EuclideanPController")
                           << " update failed.\n";
                 break;
@@ -247,21 +261,31 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
             if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { break; }
         }
 
-        if (params.log_data) {
-            Eigen::Vector3d actual_euler =
-                data.ee_pose.so3().quat().toRotationMatrix().eulerAngles(2, 1, 0);
-            Eigen::Vector3d target_euler =
-                task_target.pose.so3().quat().toRotationMatrix().eulerAngles(2, 1, 0);
+        if (logger) {
+            xarm_geo::diagnostics::LogSample s;
+            xarm_geo::diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
+            s.controller_status = static_cast<std::uint8_t>(ctrl_status);
 
-            log_file << t << "," << task_target.pose.r3().x() << "," << task_target.pose.r3().y()
-                     << "," << task_target.pose.r3().z() << "," << data.ee_pose.r3().x() << ","
-                     << data.ee_pose.r3().y() << "," << data.ee_pose.r3().z() << ","
-                     << target_euler[2] << "," << target_euler[1] << "," << target_euler[0] << ","
-                     << actual_euler[2] << "," << actual_euler[1] << "," << actual_euler[0] << "\n";
+            if (params.torque_mode) {
+                if (params.geometric) {
+                    xarm_geo::diagnostics::fill_torque_diagnostics(s, pd_controller);
+                } else {
+                    xarm_geo::diagnostics::fill_torque_diagnostics(s, pd_baseline);
+                }
+            } else {
+                if (params.geometric) {
+                    xarm_geo::diagnostics::fill_velocity_diagnostics(s, p_controller);
+                } else {
+                    xarm_geo::diagnostics::fill_velocity_diagnostics(s, p_baseline);
+                }
+            }
+
+            logger->log(s);
         }
 
         sim.step();
         t += physics_dt;
+        ++tick;
 
         if (t - last_render_t >= render_dt) {
             if (params.show_marker) { sim.set_marker(task_target.pose); }
@@ -275,6 +299,8 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
             std::this_thread::sleep_until(start_render + std::chrono::duration<double>(render_dt));
         }
     }
+
+    // logger goes out of scope here and flushes to disk before Phase 3 begins.
 
     // --- Phase 3: End To Home ---
 
@@ -299,8 +325,6 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
     sim.shutdown();
     std::cout << "Simulation Sequence Completed Safely.\n";
-
-    if (params.log_data) { log_file.close(); }
 
     return 0;
 }
@@ -398,22 +422,27 @@ auto main(int argc, char *argv[]) -> int {
 
     if (params.trajectory_mode == 0) {
         xarm_geo::trajectories::FigureEight traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params,
+                              xarm_geo::trajectories::FigureEight::kName);
     }
     if (params.trajectory_mode == 1) {
         xarm_geo::trajectories::WingInspection traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params,
+                              xarm_geo::trajectories::WingInspection::kName);
     }
     if (params.trajectory_mode == 2) {
         xarm_geo::trajectories::PipeInspection traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params,
+                              xarm_geo::trajectories::PipeInspection::kName);
     }
     if (params.trajectory_mode == 3) {
         xarm_geo::trajectories::InnerCavityScan traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params,
+                              xarm_geo::trajectories::InnerCavityScan::kName);
     }
     if (params.trajectory_mode == 4) {
         xarm_geo::trajectories::TiltingCircle traj(anchor_pose, traj_duration);
-        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params);
+        return run_simulation(model, data, col_model, col_data, sim, traj, q_home, params,
+                              xarm_geo::trajectories::TiltingCircle::kName);
     }
 }

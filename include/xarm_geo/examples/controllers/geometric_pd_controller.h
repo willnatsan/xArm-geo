@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -25,6 +26,8 @@ namespace xarm_geo::controllers {
 
     class GeometricPDController final : public DynamicTaskControllerBase {
     public:
+        static constexpr std::string_view kName = "GeometricPDController";
+
         // Recommended default; users may override after construction (e.g. None
         // when running against xArm SDK gravity compensation).
         static constexpr BiasCompensation kRecommendedBiasCompensation = BiasCompensation::Full;

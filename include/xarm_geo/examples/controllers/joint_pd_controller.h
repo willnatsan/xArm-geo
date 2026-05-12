@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -25,6 +26,8 @@ namespace xarm_geo::controllers {
 
     class JointPDController final : public DynamicJointControllerBase {
     public:
+        static constexpr std::string_view kName = "JointPDController";
+
         // Recommended default; users may override after construction.
         static constexpr BiasCompensation kRecommendedBiasCompensation =
             BiasCompensation::GravityOnly;

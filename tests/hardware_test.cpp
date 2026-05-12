@@ -1,6 +1,7 @@
 #include <chrono>
 #include <iostream>
 #include <numbers>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -9,6 +10,7 @@
 
 #include <xarm_geo/control/controller.h>
 #include <xarm_geo/core/system.h>
+#include <xarm_geo/diagnostics/logger.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
 #include <xarm_geo/examples/controllers/joint_p_controller.h>
 #include <xarm_geo/examples/trajectories/joint_ptp.h>
@@ -85,12 +87,13 @@ namespace {
     }
 
     // Task-space execution loop: drives a GeometricPController against a TaskTrajectory.
+    // When `logger` is non-null, one LogSample is recorded per tick.
     template <xarm_geo::TaskTrajectory T>
     auto run_task_space_hw(xarm_geo::Hardware &hw, const xarm_geo::Model &model,
                            xarm_geo::Data &data,
                            xarm_geo::controllers::GeometricPController &controller, const T &traj,
-                           xarm_geo::JointState &state, xarm_geo::JointVelocity &control_target)
-        -> bool {
+                           xarm_geo::JointState &state, xarm_geo::JointVelocity &control_target,
+                           xarm_geo::diagnostics::DataLogger *logger) -> bool {
 
         const double duration = traj.duration();
         const double dt = 0.002;
@@ -99,18 +102,29 @@ namespace {
 
         xarm_geo::TaskTarget target;
         auto next_tick = std::chrono::steady_clock::now();
+        std::int64_t tick = 0;
 
-        for (double t = 0.0; t < duration && hw.is_running(); t += dt) {
+        for (double t = 0.0; t < duration && hw.is_running(); t += dt, ++tick) {
             if (hw.read(state) != xarm_geo::InterfaceStatus::OK) { return false; }
             if (traj.evaluate(t, target) != xarm_geo::TrajectoryStatus::OK) { return false; }
 
             const xarm_geo::TaskControllerContext ctx{state, target, dt_ns};
-            if (controller.update(model, data, ctx, control_target) !=
-                xarm_geo::ControllerStatus::OK) {
+            const xarm_geo::ControllerStatus ctrl_status =
+                controller.update(model, data, ctx, control_target);
+
+            if (ctrl_status != xarm_geo::ControllerStatus::OK) {
                 std::cerr << "GeometricPController update failed.\n";
                 return false;
             }
             if (hw.write(control_target) != xarm_geo::InterfaceStatus::OK) { return false; }
+
+            if (logger) {
+                xarm_geo::diagnostics::LogSample s;
+                xarm_geo::diagnostics::fill_task_sample(s, t, tick, state, target, data);
+                s.controller_status = static_cast<std::uint8_t>(ctrl_status);
+                xarm_geo::diagnostics::fill_velocity_diagnostics(s, controller);
+                logger->log(s);
+            }
 
             next_tick += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                 std::chrono::duration<double>(dt));
@@ -123,10 +137,19 @@ namespace {
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <robot_ip>\n";
+        std::cerr << "Usage: " << argv[0] << " <robot_ip> [--log <false|true>]\n";
         return 1;
     }
     const std::string robot_ip = argv[1];
+
+    bool log_data = false;
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--log" && i + 1 < argc) {
+            const std::string val = argv[++i];
+            log_data = (val == "1" || val == "true");
+        }
+    }
 
     try {
         // --- Setup ---
@@ -196,6 +219,24 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        // --- Logger Setup ---
+        //
+        // Constructed before Phase 2 and destroyed (flushed) immediately after,
+        // so the CSV lands on disk before the return-to-home phase begins.
+        std::optional<xarm_geo::diagnostics::DataLogger> logger;
+        if (log_data) {
+            const std::string trial_name = xarm_geo::diagnostics::make_trial_name(
+                "hardware", xarm_geo::controllers::GeometricPController::kName,
+                xarm_geo::trajectories::TiltingCircle::kName,
+                /*constraint=*/p_controller.constraint_aware,
+                /*feedforward=*/p_controller.use_feedforward);
+
+            logger.emplace(model, xarm_geo::diagnostics::DataLogger::Config{
+                                      .output_path = "tests/results/" + trial_name + ".csv",
+                                      .trial_name = trial_name,
+                                  });
+        }
+
         // --- Execution ---
         std::cout << "[PHASE 0] Moving to Home... ";
         const xarm_geo::trajectories::JointPTP h_traj(state.q, q_home, transition_time);
@@ -207,7 +248,11 @@ int main(int argc, char *argv[]) {
         std::cout
             << "Done.\n[PHASE 2] Executing Tilting Circle (Half Speed via TimeScaledTask)...\n";
 
-        run_task_space_hw(hw, model, data, p_controller, circle_traj, state, control_target);
+        run_task_space_hw(hw, model, data, p_controller, circle_traj, state, control_target,
+                          logger ? &(*logger) : nullptr);
+
+        // logger goes out of scope here and flushes to disk before Phase 3 begins.
+        logger.reset();
 
         std::cout << "[PHASE 3] Returning Home... ";
         hw.read(state);

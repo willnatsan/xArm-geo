@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -20,6 +21,8 @@ namespace xarm_geo::controllers {
 
     class JointPController final : public KinematicJointControllerBase {
     public:
+        static constexpr std::string_view kName = "JointPController";
+
         explicit JointPController(const Model &model)
             : KinematicJointControllerBase(model), kp(Eigen::VectorXd::Zero(model.dof)) {
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -35,6 +36,8 @@ namespace xarm_geo::controllers {
 
     class PostureBiasedPController {
     public:
+        static constexpr std::string_view kName = "PostureBiasedPController";
+
         PostureBiasedPController(const Model &model, const CollisionModel &col_model,
                                  CollisionData &col_data)
             : col_model_(&col_model), col_data_(&col_data) {

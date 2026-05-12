@@ -23,7 +23,8 @@ pixi run -e lint lint
 
 ## Documentation
 
-Authoring guides for using the library:
+Guides for using and extending the library:
 
 - [`docs/authoring_controllers.md`](docs/authoring_controllers.md) — writing custom controllers
 - [`docs/authoring_trajectories.md`](docs/authoring_trajectories.md) — writing custom trajectories
+- [`docs/logging_and_analysis.md`](docs/logging_and_analysis.md) — logging + visualising trials and computing metrics

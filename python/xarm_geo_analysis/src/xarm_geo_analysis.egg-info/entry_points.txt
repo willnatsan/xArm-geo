@@ -1,0 +1,2 @@
+[console_scripts]
+xarm-geo-analyse = xarm_geo_analysis.cli:main

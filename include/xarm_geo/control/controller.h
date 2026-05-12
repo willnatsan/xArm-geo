@@ -208,6 +208,41 @@ namespace xarm_geo {
         bool g_fresh_;
     };
 
+    // --- Per-Tick Diagnostic Snapshots ---
+    //
+    // Populated at the end of every successful update() call and retrievable
+    // via last_tick_diagnostics(). Callers (e.g. DataLogger fill helpers) read
+    // these immediately after update() to assemble a LogSample without any
+    // extra allocations.
+
+    // Kinematic bases (velocity triplet).
+    struct KinematicTickDiagnostics {
+        Eigen::VectorXd v_ctrl;  // raw hook output, before any safety-layer shaping
+        Eigen::VectorXd v_des;   // == v_ctrl (no bias-compensation for kinematic bases)
+        Eigen::VectorXd v_safe;  // post OptIK / direction-preserving rescale
+
+        // NOTE: KinematicJointControllerBase has no IK layer; `optik_invoked` is
+        // always false and `optik_modified` is repurposed to flag direction-preserving
+        // velocity-limit rescaling. Conflating these under one schema keeps the Python
+        // side uniform -- revisit if a third kinematic safety layer is ever added.
+        OptimalIKStatus optik_status = OptimalIKStatus::OK;
+        bool optik_invoked =
+            false;  // true only for KinematicTaskControllerBase with constraint_aware
+        bool optik_modified =
+            false;  // ||v_safe - v_des|| > eps (or rescale clipped for joint base)
+    };
+
+    // Dynamic bases (torque triplet).
+    struct DynamicTickDiagnostics {
+        Eigen::VectorXd tau_ctrl;  // raw hook output, before bias compensation
+        Eigen::VectorXd tau_des;   // post bias-compensation; intended command without ASIF
+        Eigen::VectorXd tau_safe;  // post ASIF certification; == tau_des when ASIF is off
+
+        ASIFStatus asif_status = ASIFStatus::OK;
+        bool asif_invoked = false;   // true only when constraint_aware
+        bool asif_modified = false;  // ||tau_safe - tau_des|| > eps
+    };
+
     // --- Kinematic Task Controller Base Class ---
     //
     // SE(3)-tracking velocity-mode controllers. Eager kinematics refresh; no
@@ -227,6 +262,11 @@ namespace xarm_geo {
         void attach_collision(const CollisionModel &col_model, CollisionData &col_data) noexcept;
         void detach_collision() noexcept;
 
+        [[nodiscard]] auto last_tick_diagnostics() const noexcept
+            -> const KinematicTickDiagnostics & {
+            return diag_;
+        }
+
         // --- Public Configuration ---
 
         bool constraint_aware = false;
@@ -240,6 +280,9 @@ namespace xarm_geo {
 
         const CollisionModel *col_model_ = nullptr;
         CollisionData *col_data_ = nullptr;
+
+    private:
+        KinematicTickDiagnostics diag_;
     };
 
     // --- Dynamic Task Controller Base Class ---
@@ -262,6 +305,11 @@ namespace xarm_geo {
         void attach_collision(const CollisionModel &col_model, CollisionData &col_data) noexcept;
         void detach_collision() noexcept;
 
+        [[nodiscard]] auto last_tick_diagnostics() const noexcept
+            -> const DynamicTickDiagnostics & {
+            return diag_;
+        }
+
         // --- Public Configuration ---
 
         BiasCompensation bias_compensation = BiasCompensation::None;
@@ -281,6 +329,9 @@ namespace xarm_geo {
         Eigen::VectorXd tau_ctrl_;
         Eigen::VectorXd tau_des_;
         Eigen::VectorXd tau_safe_;
+
+    private:
+        DynamicTickDiagnostics diag_;
     };
 
     // --- Kinematic Joint Controller Base Class ---
@@ -299,6 +350,11 @@ namespace xarm_geo {
         auto update(const Model &model, Data &data, const JointControllerContext &ctx,
                     JointVelocity &out) noexcept -> ControllerStatus;
 
+        [[nodiscard]] auto last_tick_diagnostics() const noexcept
+            -> const KinematicTickDiagnostics & {
+            return diag_;
+        }
+
         // --- Public Configuration ---
         bool constraint_aware = false;
 
@@ -309,6 +365,9 @@ namespace xarm_geo {
 
         // Joint-sized scratch for the hook's output velocity.
         JointVelocity v_ctrl_;
+
+    private:
+        KinematicTickDiagnostics diag_;
     };
 
     // --- Dynamic Joint Controller Base Class ---
@@ -331,6 +390,11 @@ namespace xarm_geo {
         void attach_collision(const CollisionModel &col_model, CollisionData &col_data) noexcept;
         void detach_collision() noexcept;
 
+        [[nodiscard]] auto last_tick_diagnostics() const noexcept
+            -> const DynamicTickDiagnostics & {
+            return diag_;
+        }
+
         // --- Public Configuration ---
         BiasCompensation bias_compensation = BiasCompensation::None;
         bool constraint_aware = false;
@@ -349,6 +413,9 @@ namespace xarm_geo {
         JointTorque tau_ctrl_;
         Eigen::VectorXd tau_des_;
         Eigen::VectorXd tau_safe_;
+
+    private:
+        DynamicTickDiagnostics diag_;
     };
 
     // --- Published Controller Concepts ---

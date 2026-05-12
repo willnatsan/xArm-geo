@@ -137,6 +137,7 @@ set(LIB_SOURCES
         src/utils/model_builder.cpp
         src/utils/model_config.cpp
         src/utils/parsing_utils.cpp
+        src/diagnostics/logger.cpp
 )
 
 if(BUILD_WITH_MUJOCO)

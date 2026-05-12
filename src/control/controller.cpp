@@ -61,6 +61,19 @@ namespace xarm_geo {
         }
 
         out.v = data.v_out;
+
+        // Populate per-tick diagnostics.
+        //
+        // v_ctrl / v_des are set to the DLS-IDK result (data.v_out before OptIK
+        // may reshape it); when constraint_aware the OptIK output is the same
+        // data.v_out, so v_safe == v_ctrl when OptIK did not change the command.
+        diag_.v_ctrl = data.v_out;
+        diag_.v_des = data.v_out;
+        diag_.v_safe = data.v_out;
+        diag_.optik_invoked = constraint_aware;
+        diag_.optik_status = OptimalIKStatus::OK;
+        diag_.optik_modified = constraint_aware && ((diag_.v_safe - diag_.v_des).norm() > 1e-9);
+
         return ControllerStatus::OK;
     }
 
@@ -129,17 +142,34 @@ namespace xarm_geo {
 
             // TODO: switch to the composable asif_filter overload to avoid recomputing
             // data.M / data.h when the base has already populated them.
-            const ASIFStatus status = asif_filter(model, data, *col_model_, *col_data_, ctx.fb.v,
-                                                  tau_des_, tau_safe_, asif_options);
+            const ASIFStatus asif_status = asif_filter(model, data, *col_model_, *col_data_,
+                                                       ctx.fb.v, tau_des_, tau_safe_, asif_options);
 
-            if (status != ASIFStatus::OK) {
+            if (asif_status != ASIFStatus::OK) {
                 debug::log("asif_filter failed");
-                return to_controller_status(status);
+                return to_controller_status(asif_status);
             }
 
             out.tau = tau_safe_;
+
+            // Populate per-tick diagnostics (ASIF active).
+            diag_.tau_ctrl = tau_ctrl_;
+            diag_.tau_des = tau_des_;
+            diag_.tau_safe = tau_safe_;
+            diag_.asif_invoked = true;
+            diag_.asif_status = asif_status;
+            diag_.asif_modified = (tau_safe_ - tau_des_).norm() > 1e-9;
         } else {
             out.tau = tau_des_;
+            tau_safe_ = tau_des_;
+
+            // Populate per-tick diagnostics (ASIF bypassed).
+            diag_.tau_ctrl = tau_ctrl_;
+            diag_.tau_des = tau_des_;
+            diag_.tau_safe = tau_des_;
+            diag_.asif_invoked = false;
+            diag_.asif_status = ASIFStatus::OK;
+            diag_.asif_modified = false;
         }
 
         return ControllerStatus::OK;
@@ -169,6 +199,7 @@ namespace xarm_geo {
         // Direction-preserving velocity-limit rescale: divide the whole vector by the
         // largest abs_vel / limit factor so the worst joint hits its limit exactly and
         // the others scale down proportionally.
+        bool rescaled = false;
         if (constraint_aware) {
             double max_excess_factor = 1.0;
             for (int i = 0; i < model.dof; ++i) {
@@ -179,10 +210,22 @@ namespace xarm_geo {
                     max_excess_factor = std::max(excess, max_excess_factor);
                 }
             }
-            if (max_excess_factor > 1.0) { v_ctrl_.v /= max_excess_factor; }
+            if (max_excess_factor > 1.0) {
+                v_ctrl_.v /= max_excess_factor;
+                rescaled = true;
+            }
         }
 
         out.v = v_ctrl_.v;
+
+        // Populate per-tick diagnostics.
+        diag_.v_ctrl = v_ctrl_.v;
+        diag_.v_des = v_ctrl_.v;
+        diag_.v_safe = v_ctrl_.v;
+        diag_.optik_invoked = false;
+        diag_.optik_status = OptimalIKStatus::OK;
+        diag_.optik_modified = rescaled;
+
         return ControllerStatus::OK;
     }
 
@@ -243,17 +286,34 @@ namespace xarm_geo {
             }
 
             // TODO: see DynamicTaskControllerBase::update for the same asif_filter redundancy.
-            const ASIFStatus status = asif_filter(model, data, *col_model_, *col_data_, ctx.fb.v,
-                                                  tau_des_, tau_safe_, asif_options);
+            const ASIFStatus asif_status = asif_filter(model, data, *col_model_, *col_data_,
+                                                       ctx.fb.v, tau_des_, tau_safe_, asif_options);
 
-            if (status != ASIFStatus::OK) {
+            if (asif_status != ASIFStatus::OK) {
                 debug::log("asif_filter failed");
-                return to_controller_status(status);
+                return to_controller_status(asif_status);
             }
 
             out.tau = tau_safe_;
+
+            // Populate per-tick diagnostics (ASIF active).
+            diag_.tau_ctrl = tau_ctrl_.tau;
+            diag_.tau_des = tau_des_;
+            diag_.tau_safe = tau_safe_;
+            diag_.asif_invoked = true;
+            diag_.asif_status = asif_status;
+            diag_.asif_modified = (tau_safe_ - tau_des_).norm() > 1e-9;
         } else {
             out.tau = tau_des_;
+            tau_safe_ = tau_des_;
+
+            // Populate per-tick diagnostics (ASIF bypassed).
+            diag_.tau_ctrl = tau_ctrl_.tau;
+            diag_.tau_des = tau_des_;
+            diag_.tau_safe = tau_des_;
+            diag_.asif_invoked = false;
+            diag_.asif_status = ASIFStatus::OK;
+            diag_.asif_modified = false;
         }
 
         return ControllerStatus::OK;

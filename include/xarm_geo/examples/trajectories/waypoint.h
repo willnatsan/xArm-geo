@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string_view>
 #include <vector>
 
 #include <smooth/spline/bspline.hpp>
@@ -16,6 +17,8 @@ namespace xarm_geo::trajectories {
 
     class Waypoint {
     public:
+        static constexpr std::string_view kName = "Waypoint";
+
         Waypoint(const std::vector<manifold::SE3> &waypoints, double duration)
             : spline_(build_se3_spline<5>(waypoints, duration)), duration_(duration) {}
 

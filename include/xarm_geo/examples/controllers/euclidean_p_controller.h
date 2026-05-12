@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <numbers>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -31,6 +32,8 @@ namespace xarm_geo::controllers {
 
     class EuclideanPController final : public KinematicTaskControllerBase {
     public:
+        static constexpr std::string_view kName = "EuclideanPController";
+
         explicit EuclideanPController(const Model &model) : KinematicTaskControllerBase(model) {
             assert(model.dof > 0 && "EuclideanPController: model.dof must be > 0");
         }

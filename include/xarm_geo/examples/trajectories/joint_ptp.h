@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -20,6 +21,8 @@ namespace xarm_geo::trajectories {
 
     class JointPTP {
     public:
+        static constexpr std::string_view kName = "JointPTP";
+
         JointPTP(const Eigen::Ref<const Eigen::VectorXd> &q_start,
                  const Eigen::Ref<const Eigen::VectorXd> &q_end, double duration)
             : q_start_(q_start), duration_(duration) {

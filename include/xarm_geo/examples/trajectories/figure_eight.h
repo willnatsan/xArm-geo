@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <string_view>
 #include <utility>
 
 #include <xarm_geo/core/manifold.h>
@@ -17,6 +18,8 @@ namespace xarm_geo::trajectories {
 
     class FigureEight final : public AnalyticTaskTrajectory {
     public:
+        static constexpr std::string_view kName = "FigureEight";
+
         explicit FigureEight(const manifold::SE3 &anchor, double duration = 15.0,
                              double omega = 1.0, double size_x = 0.15, double size_y = 0.10,
                              double size_z = 0.03)

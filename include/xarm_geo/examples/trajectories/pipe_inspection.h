@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <string_view>
 #include <utility>
 
 #include <xarm_geo/core/manifold.h>
@@ -17,6 +18,8 @@ namespace xarm_geo::trajectories {
 
     class PipeInspection final : public AnalyticTaskTrajectory {
     public:
+        static constexpr std::string_view kName = "PipeInspection";
+
         explicit PipeInspection(const manifold::SE3 &anchor, double duration = 15.0,
                                 double omega = 0.4, double radius = 0.06)
             : AnalyticTaskTrajectory(anchor, duration), omega_(omega), radius_(radius) {

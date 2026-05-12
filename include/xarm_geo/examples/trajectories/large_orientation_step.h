@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -22,6 +23,8 @@ namespace xarm_geo::trajectories {
 
     class LargeOrientationStep final {
     public:
+        static constexpr std::string_view kName = "LargeOrientationStep";
+
         explicit LargeOrientationStep(const manifold::SE3 &anchor,
                                       const Eigen::Vector3d &axis = Eigen::Vector3d::Ones() /
                                                                     std::sqrt(3.0),

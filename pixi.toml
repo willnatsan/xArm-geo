@@ -40,9 +40,11 @@ pip = ">=26.0.1,<27"
 scipy = ">=1.17.1,<2"
 matplotlib = ">=3.10.8,<4"
 pandas = ">=3.0.2,<4"
+pytest = ">=8.0.0,<9"
 
 [pypi-dependencies]
 xacrodoc = ">=1.3.1, <2"
+xarm_geo_analysis = { path = "python/xarm_geo_analysis", editable = true }
 
 [tasks]
 configure = { cmd = [
@@ -93,6 +95,11 @@ clean = "cmake -E rm -rf build"
 # Executable Shortcuts
 hw = { cmd = "./build/hardware", depends-on = ["build"] }
 sim = { cmd = "./build/simulation", depends-on = ["build"] }
+
+# Analysis & Reporting
+analyse = { cmd = "python -m xarm_geo_analysis.cli" }
+report  = { cmd = "python -m xarm_geo_analysis.cli report" }
+test-analysis = { cmd = "python -m pytest python/xarm_geo_analysis/tests/ -v -p no:launch_testing -p no:launch_ros" }
 
 # --- Separate Environment for Code Quality ---
 [feature.lint.dependencies]

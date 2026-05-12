@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <numbers>
+#include <string_view>
 
 #include <Eigen/Dense>
 
@@ -34,6 +35,8 @@ namespace xarm_geo::controllers {
 
     class EuclideanPDController final : public DynamicTaskControllerBase {
     public:
+        static constexpr std::string_view kName = "EuclideanPDController";
+
         // Mirrors GeometricPDController so the A/B comparison varies only the control law.
         static constexpr BiasCompensation kRecommendedBiasCompensation = BiasCompensation::Full;
 

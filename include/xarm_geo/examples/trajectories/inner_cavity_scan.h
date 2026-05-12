@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <string_view>
 #include <utility>
 
 #include <xarm_geo/core/manifold.h>
@@ -18,6 +19,8 @@ namespace xarm_geo::trajectories {
 
     class InnerCavityScan final : public AnalyticTaskTrajectory {
     public:
+        static constexpr std::string_view kName = "InnerCavityScan";
+
         explicit InnerCavityScan(const manifold::SE3 &anchor, double duration = 15.0,
                                  double omega = 0.5, double pos_amp = 0.05)
             : AnalyticTaskTrajectory(anchor, duration), omega_(omega), pos_amp_(pos_amp) {

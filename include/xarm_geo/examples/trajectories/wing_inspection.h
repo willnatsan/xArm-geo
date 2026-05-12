@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <string_view>
 #include <utility>
 
 #include <xarm_geo/core/manifold.h>
@@ -19,6 +20,8 @@ namespace xarm_geo::trajectories {
 
     class WingInspection final : public AnalyticTaskTrajectory {
     public:
+        static constexpr std::string_view kName = "WingInspection";
+
         explicit WingInspection(const manifold::SE3 &anchor, double duration = 15.0,
                                 double omega_sweep = 0.5, double omega_scan = 2.0,
                                 double sweep_amp = 0.20, double scan_amp = 0.05,

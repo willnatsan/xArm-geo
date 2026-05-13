@@ -261,6 +261,11 @@ namespace xarm_geo::internal {
                 const tinyxml2::XMLElement *geom = col->FirstChildElement("geometry");
                 if (!geom) continue;
 
+                // TODO: Collision-geometry performance.
+                // Triangle meshes are loaded directly from the URDF here. coal::distance
+                // on mesh-mesh pairs uses BVH traversal and costs ~200-800 us per pair.
+                // Replacing each link with a bounding primitive (e.g. a single capsule per
+                // link) would reduce this to ~5 us per pair via a closed-form solve.
                 const tinyxml2::XMLElement *mesh_xml = geom->FirstChildElement("mesh");
                 if (mesh_xml) {
                     const char *file = mesh_xml->Attribute("filename");

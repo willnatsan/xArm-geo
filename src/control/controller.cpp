@@ -148,7 +148,8 @@ namespace xarm_geo {
 
             // Collision pre-requisites for DynCollisionBarrier.
             update_geometry_poses(model, data, *col_model_, *col_data_);
-            (void)compute_min_distance(*col_model_, *col_data_);
+            (void)compute_min_distance(*col_model_, *col_data_,
+                                       asif_defaults::kCollisionActivationDistance);
 
             // Default barrier trio (same gains as the convenience overload).
             DynPositionBarrier pbar(model);
@@ -332,7 +333,8 @@ namespace xarm_geo {
 
             // Collision pre-requisites for DynCollisionBarrier.
             update_geometry_poses(model, data, *col_model_, *col_data_);
-            (void)compute_min_distance(*col_model_, *col_data_);
+            (void)compute_min_distance(*col_model_, *col_data_,
+                                       asif_defaults::kCollisionActivationDistance);
 
             // Default barrier trio (same gains as the convenience overload).
             DynPositionBarrier pbar(model);

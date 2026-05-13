@@ -9,6 +9,12 @@
 #include <xarm_geo/safety/constraints.h>
 #include <xarm_geo/safety/tasks.h>
 
+namespace {
+    constexpr double CollisionActivationDistance = 0.05;  // metres
+    constexpr double CollisionBarrierAlpha = 5.0;
+    constexpr double CollisionBarrierMargin = 0.0;
+}  // namespace
+
 namespace xarm_geo {
 
     namespace {
@@ -90,9 +96,12 @@ namespace xarm_geo {
         ws.H.diagonal().array() += opts.regularisation;
 
         // Refresh collision pre-requisites; barriers without collision needs ignore col_data.
+        // Pass CollisionActivationDistance so pairs beyond the safety zone are skipped
+        // by the AABB early-out in compute_min_distance, avoiding expensive coal::distance
+        // calls for geometries that are trivially far apart.
         if (col_model != nullptr && col_data != nullptr && !barriers.empty()) {
             update_geometry_poses(model, data, *col_model, *col_data);
-            (void)compute_min_distance(*col_model, *col_data);
+            (void)compute_min_distance(*col_model, *col_data, CollisionActivationDistance);
         }
 
         // Inequality rows.
@@ -199,12 +208,6 @@ namespace xarm_geo {
     // and CollisionBarrier, then forwards to the composable solver. The soft
     // PositionBarrier is intentionally omitted (redundant with PositionLimit);
     // users wanting graceful slow-down should call the composable API.
-
-    namespace {
-        constexpr double CollisionActivationDistance = 0.05;  // metres
-        constexpr double CollisionBarrierAlpha = 5.0;
-        constexpr double CollisionBarrierMargin = 0.0;
-    }  // namespace
 
     auto optimal_inverse_diff_kinematics(const Model &model, Data &data,
                                          const CollisionModel &col_model, CollisionData &col_data,

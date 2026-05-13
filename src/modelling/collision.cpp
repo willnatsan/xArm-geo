@@ -1,3 +1,5 @@
+#include <limits>
+
 #include <coal/collision.h>
 #include <coal/distance.h>
 
@@ -78,6 +80,11 @@ namespace xarm_geo {
             coal::Transform3s transform(col_data.geom_poses[i].so3().matrix(),
                                         col_data.geom_poses[i].r3());
             col_data.collision_objects[i].setTransform(transform);
+
+            // Recompute the world-frame AABB so that getAABB() is valid for
+            // the AABB early-out in compute_min_distance. setTransform does not
+            // update the cached world AABB automatically.
+            col_data.collision_objects[i].computeAABB();
         }
     }
 
@@ -99,8 +106,8 @@ namespace xarm_geo {
 
     // --- Distance Algorithms ---
 
-    auto compute_min_distance(const CollisionModel &col_model, CollisionData &col_data)
-        -> DistanceResult {
+    auto compute_min_distance(const CollisionModel &col_model, CollisionData &col_data,
+                              double activation_distance) -> DistanceResult {
 
         DistanceResult result;
 
@@ -108,6 +115,36 @@ namespace xarm_geo {
             const auto &pair = col_model.collision_pairs[i];
 
             col_data.distance_results[i].clear();
+
+            // --- AABB early-out ---
+            //
+            // AABB::distance() returns 0 when the boxes overlap and the
+            // positive separation distance otherwise. Since AABB distance is a
+            // lower bound on true geometry distance, a separation larger than
+            // activation_distance guarantees the true distance also exceeds
+            // activation_distance. In that case the pair is inactive (the
+            // barrier contributes a trivially-satisfied +inf row) so we skip
+            // the expensive coal::distance call.
+            //
+            // update_geometry_poses() must have called computeAABB() on every
+            // object before this function, which is now guaranteed.
+            if (activation_distance > 0.0) {
+                const auto &obj1 = col_data.collision_objects[pair.obj1_idx];
+                const auto &obj2 = col_data.collision_objects[pair.obj2_idx];
+
+                const double aabb_sep = obj1.getAABB().distance(obj2.getAABB());
+                if (aabb_sep > activation_distance) {
+                    // Write sentinel: pair is well beyond the safety zone.
+                    // Barriers check d_k >= activation_distance and skip their
+                    // Jacobian row, making the constraint trivially inactive.
+                    col_data.distance_results[i].min_distance =
+                        std::numeric_limits<double>::infinity();
+                    col_data.distance_results[i].nearest_points[0].setZero();
+                    col_data.distance_results[i].nearest_points[1].setZero();
+                    continue;
+                }
+            }
+
             coal::distance(&col_data.collision_objects[pair.obj1_idx],
                            &col_data.collision_objects[pair.obj2_idx],
                            col_data.distance_requests[i], col_data.distance_results[i]);

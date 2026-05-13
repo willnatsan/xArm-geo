@@ -27,7 +27,7 @@ namespace xarm_geo {
                                         // take sensible large steps (≈ 18 deg/joint/iter at the
                                         // default) without being capped by the real-time velocity
                                         // limit that applies during closed-loop control.
-        int max_iters_qp = 50;          // ProxQP Inner Iterations
+        int max_iters_qp = 20;          // ProxQP Inner Iterations
         bool warmstart = true;          // Reuse Previous QP Solution
         double tolerance = 1e-4;        // Convergence Threshold (Position-Level IK)
         int max_iters = 50;             // Maximum Iterations (Position-Level IK)

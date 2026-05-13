@@ -186,7 +186,8 @@ namespace xarm_geo {
 
         // Collision pre-requisites for DynCollisionBarrier.
         update_geometry_poses(model, data, col_model, col_data);
-        (void)compute_min_distance(col_model, col_data);
+        (void)compute_min_distance(col_model, col_data,
+                                   asif_defaults::kCollisionActivationDistance);
 
         DynPositionBarrier pbar(model);
         pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
@@ -238,7 +239,8 @@ namespace xarm_geo {
 
         if (col_model != nullptr && scratch_col_data != nullptr) {
             update_geometry_poses(model, scratch_data, *col_model, *scratch_col_data);
-            (void)compute_min_distance(*col_model, *scratch_col_data);
+            (void)compute_min_distance(*col_model, *scratch_col_data,
+                                       asif_defaults::kCollisionActivationDistance);
         }
 
         // Each barrier reads from scratch_data; live_data is never touched.

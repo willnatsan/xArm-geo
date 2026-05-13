@@ -78,7 +78,16 @@ namespace xarm_geo {
     };
 
     // Note: Requires update_geometry_poses() to have been called first.
-    auto compute_min_distance(const CollisionModel &col_model, CollisionData &col_data)
-        -> DistanceResult;
+    //
+    // If activation_distance > 0, pairs whose world-AABB separation already
+    // exceeds activation_distance are skipped: coal::distance is not called and
+    // the per-pair DistanceResult is written with min_distance = +inf and zeroed
+    // nearest_points. This is a conservative early-out (AABB distance is a
+    // lower bound on true geometry distance), so no valid close pairs are missed.
+    // Barriers treat inf distance as trivially safe and skip their Jacobian row.
+    //
+    // Pass activation_distance = 0.0 (the default) to run all pairs unconditionally.
+    auto compute_min_distance(const CollisionModel &col_model, CollisionData &col_data,
+                              double activation_distance = 0.0) -> DistanceResult;
 
 }  // namespace xarm_geo

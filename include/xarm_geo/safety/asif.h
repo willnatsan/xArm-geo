@@ -39,7 +39,7 @@ namespace xarm_geo {
 
     struct ASIFOptions {
         double regularisation = 1e-12;  // Tikhonov diagonal regulariser
-        int max_iters_qp = 50;          // ProxQP inner iterations
+        int max_iters_qp = 20;          // ProxQP inner iterations
         bool warmstart = true;          // reuse previous QP solution
 
         // Hard torque box. Empty -> no torque bounds. The convenience overload

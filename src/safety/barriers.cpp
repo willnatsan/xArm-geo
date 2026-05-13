@@ -68,10 +68,19 @@ namespace xarm_geo {
         auto &J_p2 = data.collision.point_jacobian_2;
 
         for (int k = 0; k < num_pairs; ++k) {
-            const auto &pair = col_model->collision_pairs[k];
             const auto &dist_result = col_data->distance_results[k];
-
             const double d_k = dist_result.min_distance;
+
+            // Pair is outside the activation zone (or was culled by the AABB
+            // early-out in compute_min_distance and assigned d_k = +inf).
+            // Write a trivially-satisfied row and skip the Jacobian computation.
+            if (d_k >= activation_distance) {
+                G.row(k).setZero();
+                b(k) = std::numeric_limits<double>::infinity();
+                continue;
+            }
+
+            const auto &pair = col_model->collision_pairs[k];
             const Eigen::Vector3d &p1 = dist_result.nearest_points[0];
             const Eigen::Vector3d &p2 = dist_result.nearest_points[1];
 
@@ -202,10 +211,19 @@ namespace xarm_geo {
         auto &J_p2 = data.collision.point_jacobian_2;
 
         for (int k = 0; k < num_pairs; ++k) {
-            const auto &pair = col_model->collision_pairs[k];
             const auto &dist_result = col_data->distance_results[k];
-
             const double d_k = dist_result.min_distance;
+
+            // Pair is outside the activation zone (or was culled by the AABB
+            // early-out in compute_min_distance and assigned d_k = +inf).
+            // Write a trivially-satisfied row and skip the Jacobian computation.
+            if (d_k >= activation_distance) {
+                A.row(k).setZero();
+                b(k) = std::numeric_limits<double>::infinity();
+                continue;
+            }
+
+            const auto &pair = col_model->collision_pairs[k];
             const Eigen::Vector3d &p1 = dist_result.nearest_points[0];
             const Eigen::Vector3d &p2 = dist_result.nearest_points[1];
 

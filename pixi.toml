@@ -90,11 +90,17 @@ build_asan = { depends-on = [
   "build"
 ] }
 
+# Release Mode Build
+build_release = { depends-on = [
+  { task = "configure", args = ["Release"] },
+  "build"
+] }
+
 clean = "cmake -E rm -rf build"
 
 # Executable Shortcuts
-hw = { cmd = "./build/hardware", depends-on = ["build"] }
-sim = { cmd = "./build/simulation", depends-on = ["build"] }
+hw = { cmd = "./build/hardware", depends-on = ["build_release"] }
+sim = { cmd = "./build/simulation", depends-on = ["build_release"] }
 
 # Analysis & Reporting
 analyse = { cmd = "python -m xarm_geo_analysis.cli" }

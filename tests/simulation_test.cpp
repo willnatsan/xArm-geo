@@ -1,7 +1,103 @@
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
 #include <iostream>
 #include <numbers>
+#include <numeric>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
+#include <vector>
+
+// Note: Safety filter and controller updates are rate-limited relative to the
+// physics step to reduce per-tick QP solve cost. The nominal physics rate
+// is 500 Hz (physics_dt = 0.002 s); with a decimation factor of 4 the
+// safety-aware controller runs at 125 Hz while MuJoCo continues at 500 Hz,
+// retaining the last written command between updates.
+//
+// Note: Hardware Control Rate
+// The xArm controller silently drops commands sent faster than 250 Hz on both
+// vc_set_joint_velocity (mode 4) and set_servo_angle_j (mode 1). The UFactory
+// User Manual (v1.6.1) recommends a command rate of 30-250 Hz, preferably
+// 100-200 Hz, for stable motion. The effective controller rate at
+// kSafetyDecimationFactor = 4 is 125 Hz, which sits cleanly inside the
+// preferred 100-200 Hz band.
+static constexpr int kSafetyDecimationFactor = 4;
+
+// Physics step size used by MuJoCo and the outer simulation loop.  The
+// physics rate is intrinsic to simulator fidelity (constraint-solver
+// stability, contact dynamics) and is independent of the controller rate.
+static constexpr double kSimulationPhysicsPeriodS = 0.002;  // 500 Hz
+
+// This is the simulation-side analogue of kHardwareControlPeriodS in
+// hardware_test.cpp.
+//
+// Rate reference table:
+//   decim 1 -> 500 Hz  [EXCEEDS SDK ceiling; half commands dropped on hardware]
+//   decim 2 -> 250 Hz  [At SDK ceiling; no headroom]
+//   decim 4 -> 125 Hz  [Preferred range; recommended for hardware]
+//   decim 5 -> 100 Hz  [Lower preferred bound; still fine]
+//   decim 8 ->  62 Hz  [Above 30 Hz floor; motion may begin to look choppy]
+//   decim 16->  31 Hz  [At discontinuity threshold; not recommended]
+static constexpr double kSimulationControlPeriodS =
+    kSafetyDecimationFactor * kSimulationPhysicsPeriodS;  // 0.008 s = 125 Hz
+
+// --- Per-Tick Controller Timing ---
+//
+// Lightweight, non-intrusive timing helper for the Phase 2 controller loop.
+// record() is O(1) with pre-allocated storage; report() sorts a copy at
+// end-of-trial, so no allocations occur inside the hot loop.
+//
+// All durations are in microseconds (µs).
+
+namespace {
+
+    struct PerfStats {
+        std::vector<double> samples_us;
+
+        // Pre-allocate storage to avoid heap allocation inside the control loop.
+        void reserve(std::size_t n) { samples_us.reserve(n); }
+
+        void record(std::chrono::steady_clock::time_point t0,
+                    std::chrono::steady_clock::time_point t1) {
+            samples_us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+        }
+
+        void report(std::string_view label) const {
+            if (samples_us.empty()) {
+                std::cout << label << ": no samples recorded.\n";
+                return;
+            }
+
+            std::vector<double> sorted = samples_us;
+            std::sort(sorted.begin(), sorted.end());
+
+            const std::size_t n = sorted.size();
+            const double mean =
+                std::accumulate(sorted.begin(), sorted.end(), 0.0) / static_cast<double>(n);
+
+            auto percentile = [&](double p) -> double {
+                // Nearest-rank method.
+                const std::size_t idx =
+                    std::max(std::size_t{0},
+                             static_cast<std::size_t>(std::ceil(p * static_cast<double>(n))) - 1);
+                return sorted[std::min(idx, n - 1)];
+            };
+
+            std::cout << "\n"
+                      << label << " (n=" << n << " samples):\n"
+                      << "  p50:  " << percentile(0.50) << " us\n"
+                      << "  p95:  " << percentile(0.95) << " us\n"
+                      << "  p99:  " << percentile(0.99) << " us\n"
+                      << "  max:  " << sorted.back() << " us\n"
+                      << "  mean: " << mean << " us\n"
+                      << "  [budget: " << (kSafetyDecimationFactor * 2000.0)
+                      << " us per controller tick  |  2000 us per physics step]\n";
+        }
+    };
+
+}  // namespace
 
 #include <xarm_geo/core/system.h>
 #include <xarm_geo/diagnostics/logger.h>
@@ -40,41 +136,61 @@ auto run_joint_ptp(xarm_geo::Simulation &sim, const xarm_geo::Model &model, xarm
 
     const double duration = traj.duration();
     double t = 0.0;
-    double physics_dt = 0.002;
+    const double physics_dt = kSimulationPhysicsPeriodS;
     double render_dt = 1.0 / 60.0;
     double last_render_t = 0.0;
 
+    // ctx.dt must reflect the actual period between controller invocations
+    // (kSimulationControlPeriodS), not the physics step (kSimulationPhysicsPeriodS).
     const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::duration<double>(physics_dt));
+        std::chrono::duration<double>(kSimulationControlPeriodS));
 
     xarm_geo::JointTarget joint_target(traj.dof());
 
+    std::int64_t tick = 0;
     while (t < duration && sim.is_running()) {
+        // Capture the step deadline at the top of each iteration so the
+        // sleep_until at the bottom paces the simulation to real-time.
+        // This mirrors a hardware control loop where the robot (physics) always
+        // runs at wall-clock rate; render is a best-effort overlay inside the
+        // same budget and does not gate the physics rate.
+        const auto step_start = std::chrono::steady_clock::now();
+
         if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { return false; }
 
-        if (traj.evaluate(t, joint_target) != xarm_geo::TrajectoryStatus::OK) { return false; }
+        // Controller and write are decimated; MuJoCo retains the last ctrl
+        // command between updates so the actuator output is held constant.
+        if (tick % kSafetyDecimationFactor == 0) {
+            if (traj.evaluate(t, joint_target) != xarm_geo::TrajectoryStatus::OK) { return false; }
 
-        const xarm_geo::JointControllerContext ctx{state, joint_target, dt_ns};
-        if (joint_controller.update(model, data, ctx, control_target) !=
-            xarm_geo::ControllerStatus::OK) {
-            std::cerr << "JointPController update failed.\n";
-            return false;
+            const xarm_geo::JointControllerContext ctx{state, joint_target, dt_ns};
+            if (joint_controller.update(model, data, ctx, control_target) !=
+                xarm_geo::ControllerStatus::OK) {
+                std::cerr << "JointPController update failed.\n";
+                return false;
+            }
+
+            if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { return false; }
         }
-
-        if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { return false; }
 
         sim.step();
         t += physics_dt;
+        ++tick;
 
         if (t - last_render_t >= render_dt) {
-            auto start_render = std::chrono::steady_clock::now();
-
             sim.update_scene();
             sim.render();
             last_render_t = t;
-
-            std::this_thread::sleep_until(start_render + std::chrono::duration<double>(render_dt));
+            // No sleep here: render is a best-effort overlay; the per-step
+            // sleep_until below provides the real-time pacing.
         }
+
+        // Pace the loop to real-time: sleep until one physics_dt has elapsed
+        // since the start of this iteration. If the work took longer than
+        // physics_dt (controller overrun), sleep_until returns immediately and
+        // the simulation falls behind real-time -- the same honest behaviour
+        // as a hardware control loop missing a deadline.
+        std::this_thread::sleep_until(step_start + std::chrono::duration<double>(physics_dt));
     }
 
     control_target.v.setZero();
@@ -158,6 +274,11 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
+    // Switch to torque mode only after Phase 1 has completed. Phase 1 uses
+    // JointPController (JointVelocity output), which requires VELOCITY mode.
+    // Phase 3 restores VELOCITY before its joint-PTP return move.
+    if (params.torque_mode) { sim.set_control_mode(xarm_geo::ControlMode::TORQUE); }
+
     // --- Phase 2: Main Trajectory Execution ---
 
     std::cout << "\n[PHASE 2] Executing Task Space Trajectory...\n";
@@ -172,7 +293,7 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
               << "  Data Logging: " << (params.log_data ? "ON" : "OFF") << "\n";
 
     double t = 0.0;
-    double physics_dt = 0.002;
+    const double physics_dt = kSimulationPhysicsPeriodS;
     double render_dt = 1.0 / 60.0;
     double last_render_t = 0.0;
 
@@ -203,8 +324,13 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     if (params.constraint_aware) { pd_baseline.attach_collision(col_model, col_data); }
 
     xarm_geo::JointTorque torque_target(model.dof);
+    // ctx.dt must reflect the actual controller invocation period
+    // (kSimulationControlPeriodS = 8 ms at decim 4), not the physics step
+    // (2 ms).  GeometricPIController and GeometricPIDController consume
+    // ctx.dt for integrator accumulation; using physics_dt here would
+    // integrate at 1/kSafetyDecimationFactor of the intended rate.
     const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::duration<double>(physics_dt));
+        std::chrono::duration<double>(kSimulationControlPeriodS));
 
     // Determine the active controller name for the trial filename.
     const std::string_view controller_name =
@@ -227,60 +353,87 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
                               });
     }
 
+    // Pre-allocate the timing buffer for the expected number of controller
+    // ticks (duration / (kSafetyDecimationFactor * physics_dt)) plus headroom,
+    // so push_back inside the hot loop never allocates.
+    PerfStats perf_phase2;
+    {
+        const std::size_t expected_ctrl_ticks =
+            static_cast<std::size_t>(duration / (kSafetyDecimationFactor * physics_dt)) + 32;
+        perf_phase2.reserve(expected_ctrl_ticks);
+    }
+
     std::int64_t tick = 0;
     while (t < duration && sim.is_running()) {
+        // Capture the step deadline at the top of each iteration so the
+        // sleep_until at the bottom paces the simulation to real-time.
+        const auto step_start = std::chrono::steady_clock::now();
+
         if (sim.read(state) != xarm_geo::InterfaceStatus::OK) { break; }
 
-        if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) { break; }
+        // Controller, write, and logging are decimated to reduce per-tick QP
+        // cost. MuJoCo retains the last ctrl command between updates.
+        if (tick % kSafetyDecimationFactor == 0) {
+            if (trajectory.evaluate(t, task_target) != xarm_geo::TrajectoryStatus::OK) { break; }
 
-        const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
+            const xarm_geo::TaskControllerContext ctx{state, task_target, dt_ns};
 
-        xarm_geo::ControllerStatus ctrl_status = xarm_geo::ControllerStatus::OK;
+            xarm_geo::ControllerStatus ctrl_status = xarm_geo::ControllerStatus::OK;
 
-        if (params.torque_mode) {
-            // Dynamic Mode: (Geometric|Euclidean)PDController -> JointTorque.
-            ctrl_status = params.geometric ? pd_controller.update(model, data, ctx, torque_target)
-                                           : pd_baseline.update(model, data, ctx, torque_target);
-
-            if (ctrl_status != xarm_geo::ControllerStatus::OK) {
-                std::cerr << (params.geometric ? "GeometricPDController" : "EuclideanPDController")
-                          << " update failed.\n";
-                break;
-            }
-            if (sim.write(torque_target) != xarm_geo::InterfaceStatus::OK) { break; }
-        } else {
-            // Kinematic Mode: (Geometric|Euclidean)PController -> JointVelocity.
-            ctrl_status = params.geometric ? p_controller.update(model, data, ctx, control_target)
-                                           : p_baseline.update(model, data, ctx, control_target);
-
-            if (ctrl_status != xarm_geo::ControllerStatus::OK) {
-                std::cerr << (params.geometric ? "GeometricPController" : "EuclideanPController")
-                          << " update failed.\n";
-                break;
-            }
-            if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { break; }
-        }
-
-        if (logger) {
-            xarm_geo::diagnostics::LogSample s;
-            xarm_geo::diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
-            s.controller_status = static_cast<std::uint8_t>(ctrl_status);
+            const auto ctrl_t0 = std::chrono::steady_clock::now();
 
             if (params.torque_mode) {
-                if (params.geometric) {
-                    xarm_geo::diagnostics::fill_torque_diagnostics(s, pd_controller);
-                } else {
-                    xarm_geo::diagnostics::fill_torque_diagnostics(s, pd_baseline);
+                // Dynamic Mode: (Geometric|Euclidean)PDController -> JointTorque.
+                ctrl_status = params.geometric
+                                  ? pd_controller.update(model, data, ctx, torque_target)
+                                  : pd_baseline.update(model, data, ctx, torque_target);
+
+                if (ctrl_status != xarm_geo::ControllerStatus::OK) {
+                    std::cerr << (params.geometric ? "GeometricPDController"
+                                                   : "EuclideanPDController")
+                              << " update failed.\n";
+                    break;
                 }
+                if (sim.write(torque_target) != xarm_geo::InterfaceStatus::OK) { break; }
             } else {
-                if (params.geometric) {
-                    xarm_geo::diagnostics::fill_velocity_diagnostics(s, p_controller);
-                } else {
-                    xarm_geo::diagnostics::fill_velocity_diagnostics(s, p_baseline);
+                // Kinematic Mode: (Geometric|Euclidean)PController -> JointVelocity.
+                ctrl_status = params.geometric
+                                  ? p_controller.update(model, data, ctx, control_target)
+                                  : p_baseline.update(model, data, ctx, control_target);
+
+                if (ctrl_status != xarm_geo::ControllerStatus::OK) {
+                    std::cerr << (params.geometric ? "GeometricPController"
+                                                   : "EuclideanPController")
+                              << " update failed.\n";
+                    break;
                 }
+                if (sim.write(control_target) != xarm_geo::InterfaceStatus::OK) { break; }
             }
 
-            logger->log(s);
+            const auto ctrl_t1 = std::chrono::steady_clock::now();
+            perf_phase2.record(ctrl_t0, ctrl_t1);
+
+            if (logger) {
+                xarm_geo::diagnostics::LogSample s;
+                xarm_geo::diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
+                s.controller_status = static_cast<std::uint8_t>(ctrl_status);
+
+                if (params.torque_mode) {
+                    if (params.geometric) {
+                        xarm_geo::diagnostics::fill_torque_diagnostics(s, pd_controller);
+                    } else {
+                        xarm_geo::diagnostics::fill_torque_diagnostics(s, pd_baseline);
+                    }
+                } else {
+                    if (params.geometric) {
+                        xarm_geo::diagnostics::fill_velocity_diagnostics(s, p_controller);
+                    } else {
+                        xarm_geo::diagnostics::fill_velocity_diagnostics(s, p_baseline);
+                    }
+                }
+
+                logger->log(s);
+            }
         }
 
         sim.step();
@@ -289,18 +442,29 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
 
         if (t - last_render_t >= render_dt) {
             if (params.show_marker) { sim.set_marker(task_target.pose); }
-
-            auto start_render = std::chrono::steady_clock::now();
-
             sim.update_scene();
             sim.render();
             last_render_t = t;
-
-            std::this_thread::sleep_until(start_render + std::chrono::duration<double>(render_dt));
+            // No sleep here: render is best-effort; the per-step sleep_until
+            // below provides real-time pacing.
         }
+
+        // Pace to real-time: sleep until one physics_dt has elapsed since the
+        // start of this iteration. Overruns return immediately, faithfully
+        // signalling missed deadlines as a hardware loop would.
+        std::this_thread::sleep_until(step_start + std::chrono::duration<double>(physics_dt));
     }
 
     // logger goes out of scope here and flushes to disk before Phase 3 begins.
+
+    // Print per-tick controller update timing for the dissertation / hardware-
+    // readiness assessment. Sorting and printing happen out of the hot loop.
+    const std::string_view mode_tag =
+        params.torque_mode ? (params.constraint_aware ? "[PHASE 2] Torque, constraint_aware"
+                                                      : "[PHASE 2] Torque, unconstrained")
+                           : (params.constraint_aware ? "[PHASE 2] Kinematic, constraint_aware"
+                                                      : "[PHASE 2] Kinematic, unconstrained");
+    perf_phase2.report(mode_tag);
 
     // --- Phase 3: End To Home ---
 
@@ -393,8 +557,6 @@ auto main(int argc, char *argv[]) -> int {
 
     xarm_geo::Data data(model);
     xarm_geo::Simulation sim(model.mjcf_file);
-
-    if (params.torque_mode) { sim.set_control_mode(xarm_geo::ControlMode::TORQUE); }
 
     xarm_geo::CollisionModel col_model = xarm_geo::build_collision_model(model, true);
     xarm_geo::CollisionData col_data(col_model);

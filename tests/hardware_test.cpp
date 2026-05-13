@@ -23,6 +23,36 @@
 #include <xarm_geo/trajectory/validate.h>
 #include <xarm_geo/utils/model_builder.h>
 
+// --- Hardware Control Rate ---
+//
+// The xArm SDK silently drops commands sent faster than 250 Hz on both
+// vc_set_joint_velocity (mode 4) and set_servo_angle_j (mode 1). The UFactory
+// User Manual (v1.6.1) recommends 30-250 Hz, preferably 100-200 Hz, for
+// stable motion. We run the control loop at 125 Hz (dt = 0.008 s), matching
+// the effective controller rate of simulation_test.cpp (kSafetyDecimationFactor
+// = 4 over a 500 Hz physics step).
+//
+// At 125 Hz the per-tick wall budget is 8 ms. From simulation measurements on
+// the xArm6 PipeInspection trajectory:
+//   Kinematic, unconstrained:    p99 ~1.5 ms  (~18% of budget)
+//   Kinematic, constraint_aware: p99 ~6.2 ms  (~77% of budget)
+// Both modes fit within the 8 ms budget, leaving margin for SDK roundtrip
+// latency and OS scheduling jitter.
+//
+// Rate reference table:
+//   500 Hz  [EXCEEDS SDK ceiling; half commands silently dropped]
+//   250 Hz  [At SDK ceiling; no jitter headroom]
+//   125 Hz  [Preferred range; current choice]   <-- kHardwareControlPeriodS
+//   100 Hz  [Lower preferred bound]
+//    62 Hz  [Above 30 Hz floor; motion may begin to look choppy]
+//    31 Hz  [At discontinuity threshold; not recommended]
+//
+// To change the control rate, adjust the single constant below. It propagates
+// automatically to both loop runners and all controller OptIK timesteps.
+//
+// Source: UFactory xArm User Manual v1.6.1, Servoj / velocity-control mode.
+static constexpr double kHardwareControlPeriodS = 0.008;  // 125 Hz
+
 // --- Optional Safety Enclosure ---
 // Static box geometries around the robot to prevent workspace exits.
 // Uncomment the call site in main() to enable.
@@ -60,7 +90,7 @@ namespace {
                           xarm_geo::JointVelocity &control_target) -> bool {
 
         const double duration = traj.duration();
-        const double dt = 0.002;
+        const double dt = kHardwareControlPeriodS;
         const auto dt_ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(dt));
 
@@ -96,7 +126,7 @@ namespace {
                            xarm_geo::diagnostics::DataLogger *logger) -> bool {
 
         const double duration = traj.duration();
-        const double dt = 0.002;
+        const double dt = kHardwareControlPeriodS;
         const auto dt_ns =
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(dt));
 
@@ -211,6 +241,8 @@ int main(int argc, char *argv[]) {
         p_controller.use_feedforward = true;
         p_controller.constraint_aware = true;
         p_controller.attach_collision(col_model, col_data);
+        // Same OptIK timestep alignment as joint_controller above.
+        p_controller.optimal_ik_options.dt = kHardwareControlPeriodS;
 
         const auto val = xarm_geo::validate_trajectory(model, data, col_model, col_data,
                                                        circle_traj, q_start, p_controller);

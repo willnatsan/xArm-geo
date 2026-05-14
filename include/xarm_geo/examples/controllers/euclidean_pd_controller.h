@@ -24,9 +24,21 @@ namespace xarm_geo::controllers {
     //
     // World-frame law (mirrors GeometricPDController's wrench-direct PD +
     // Lambda-scaled FF structure):
-    //   F_w     = K_p * e_pos       - K_d * e_vel_lin             [PD linear, wrench-direct]
-    //           + E(rpy) * K_p * e_rpy - K_d * e_vel_ang          [PD angular, see below]
-    //           + Lambda_w(q) * a_d_w                             [if use_feedforward]
+    //   F_w_pd  = K_p * e_pos       + K_d * e_vel_lin             [PD linear, wrench-direct]
+    //           + E(rpy) * K_p * e_rpy + K_d * e_vel_ang          [PD angular, see below]
+    //
+    // F_w_pd is built as "force-and-torque applied at the EE" in world frame.
+    // The smooth SE(3) Ad convention treats the wrench covector as
+    // (force, moment-about-world-origin), so a lever-arm correction is applied
+    // before the spatial-to-body transform:
+    //
+    //   F_w.tail<3>() += p x F_w.head<3>()                        [tau_origin = tau_ee + p x f]
+    //
+    // The FF term Lambda_w(q) * a_d_w is derived from J_s = Ad_g * J_b and is
+    // already a spatial wrench in (force, moment-about-origin) form; it does not
+    // require the lever-arm correction and is added after it.
+    //
+    //   F_w     = F_w_pd (lever-arm corrected) + Lambda_w * a_d_w [if use_feedforward]
     //   F_b     = Ad_g^T * F_w                                    [base pipeline]
     //
     // Retained naivetes (intentional, distinguish this baseline from the
@@ -87,8 +99,8 @@ namespace xarm_geo::controllers {
             const Eigen::Vector3d e_vel_lin = xi_d_w.head<3>() - xi_w.head<3>();
             const Eigen::Vector3d e_vel_ang = xi_d_w.tail<3>() - xi_w.tail<3>();
 
-            // World-frame PD wrench: produced directly in wrench units (no
-            // Lambda-scaling on the PD term -- see GeometricPDController doc).
+            // World-frame PD wrench: produced directly in wrench units
+            // (no Lambda-scaling on the PD term -- see GeometricPDController doc).
             const Eigen::Vector3d kp_rpy = gains.kp_rot.cwiseProduct(e_rpy);
             const Eigen::Vector3d kp_rpy_w = rpy_rate_to_spatial_omega(rpy, kp_rpy);
 
@@ -96,7 +108,13 @@ namespace xarm_geo::controllers {
             F_w.head<3>() = gains.kp_pos.cwiseProduct(e_pos) + gains.kd_lin.cwiseProduct(e_vel_lin);
             F_w.tail<3>() = kp_rpy_w + gains.kd_ang.cwiseProduct(e_vel_ang);
 
+            // Lever-arm correction. Without this, Ad_g^T introduces a velocity-dependent
+            // torque coupling (p x K_d * xi_w) that destabilises tracking trajectories.
+            F_w.tail<3>() += g.r3().cross(F_w.head<3>());
+
             // Feedforward: Lambda_w(q) * a_d_w with the naive (no ad^* coupling) form.
+            // Lambda_w is derived from J_s = Ad_g * J_b, so Lambda_w * a_d_w is already
+            // a spatial wrench in (force, moment-about-origin) form; no lever-arm needed.
             if (use_feedforward) {
                 const manifold::SE3::Jacobian J_s = g.Ad() * kin.body_jacobian();
                 M_llt_.compute(dyn.M());
@@ -109,7 +127,8 @@ namespace xarm_geo::controllers {
                 }
             }
 
-            // Frame change for the base pipeline: F_b = Ad_g^T * F_w (not part of the law).
+            // Spatial-to-body wrench: F_b = Ad_g^T * F_w (not part of the law).
+            // F_w is now a fully corrected spatial wrench (force, moment-about-origin).
             cmd_wrench = g.Ad().transpose() * F_w;
             return true;
         }

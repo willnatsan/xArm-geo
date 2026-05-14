@@ -15,8 +15,11 @@ namespace xarm_geo::controllers {
     // --- Geometric P Controller ---
     //
     // SE(3)-tracking kinematic P controller. Body-frame command twist:
-    //   xi_c = Ad_{g_e} * xi_d - nabla Phi(g_e)    (use_feedforward = true)
-    //   xi_c =                 - nabla Phi(g_e)    (use_feedforward = false)
+    //   xi_c = Ad_{g_e} * xi_d + nabla Phi(g_e)    (use_feedforward = true)
+    //   xi_c =                   nabla Phi(g_e)    (use_feedforward = false)
+    //
+    // se3_*_gradient returns +nabla Phi; under the left-error convention
+    // g_e = g^{-1} g_d, body-frame descent adds +nabla Phi (see feedback.h).
 
     class GeometricPController final : public KinematicTaskControllerBase {
     public:
@@ -47,9 +50,9 @@ namespace xarm_geo::controllers {
             const manifold::SE3::Twist ad_xi_d = g_e.Ad() * ctx.ref.twist;
 
             if (use_feedforward) {
-                cmd_twist = ad_xi_d - grad;
+                cmd_twist = ad_xi_d + grad;
             } else {
-                cmd_twist = -grad;
+                cmd_twist = grad;
             }
             return true;
         }

@@ -15,6 +15,9 @@ assets/mjcf/*.xml
 !assets/mjcf/*_scene.xml
 !assets/mjcf/*_extension.xml
 
+# Ignore validation / simulation log and CSV outputs
+tests/results/
+
 # pixi environments
 .pixi/*
 !.pixi/config.toml

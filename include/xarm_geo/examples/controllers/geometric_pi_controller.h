@@ -19,8 +19,11 @@ namespace xarm_geo::controllers {
     // SE(3)-tracking kinematic PI. Mixed-state integral (Goodarzi et al. 2013);
     // the integrator accumulates nabla Phi(g_e) through per-axis saturation
     // for anti-windup:
-    //   xi_c     = Ad_{g_e} * xi_d - nabla Phi(g_e) - K_I * sat(e_I)
+    //   xi_c     = Ad_{g_e} * xi_d + nabla Phi(g_e) - K_I * sat(e_I)
     //   dot(e_I) = nabla Phi(g_e)
+    //
+    // se3_lie_group_gradient returns +nabla Phi; see feedback.h for why
+    // body-frame descent adds (not subtracts) nabla Phi under g_e = g^{-1} g_d.
     //
     // Hardcoded to the Lie-group gradient -- the log-map gradient's branch
     // cut near theta = pi makes it unsafe to integrate. Call reset() to zero
@@ -54,6 +57,7 @@ namespace xarm_geo::controllers {
                 se3_lie_group_gradient(g_e, gains.kp_pos, gains.kp_rot);
 
             // Mixed-state integrator: dot(e_I) = nabla Phi(g_e).
+            // grad = +nabla Phi, so accumulate directly.
             const double dt = std::chrono::duration<double>(ctx.dt).count();
             e_I_.noalias() += grad * dt;
 
@@ -68,9 +72,9 @@ namespace xarm_geo::controllers {
 
             const manifold::SE3::Twist ad_xi_d = g_e.Ad() * ctx.ref.twist;
             if (use_feedforward) {
-                cmd_twist = ad_xi_d - grad - integral_term;
+                cmd_twist = ad_xi_d + grad - integral_term;
             } else {
-                cmd_twist = -grad - integral_term;
+                cmd_twist = grad - integral_term;
             }
 
             return true;

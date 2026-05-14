@@ -97,10 +97,14 @@ namespace xarm_geo::internal {
                 link["inertia"]["ixz"].as<double>(), link["inertia"]["iyz"].as<double>(),
                 link["inertia"]["izz"].as<double>();
 
+            // Spatial inertia block layout for smooth's [v_lin; omega] tangent
+            // convention: mass*I_3 in the top-left (linear) block, rotational
+            // inertia tensor in the bottom-right (angular) block. Swapping the
+            // two blocks produces a ~400x error in g(q) and M(q).
             manifold::SE3::SpatialInertia spatial_inertia_com =
                 manifold::SE3::SpatialInertia::Zero();
-            spatial_inertia_com.topLeftCorner(3, 3) = com_inertia;
-            spatial_inertia_com.bottomRightCorner(3, 3) = mass * Eigen::Matrix3d::Identity();
+            spatial_inertia_com.topLeftCorner(3, 3) = mass * Eigen::Matrix3d::Identity();
+            spatial_inertia_com.bottomRightCorner(3, 3) = com_inertia;
             spatial_inertias_com.emplace_back(spatial_inertia_com);
 
             // CoM -> link origin frame change (origin defines link-origin -> CoM).
@@ -315,6 +319,18 @@ namespace xarm_geo {
         internal::load_kinematic_params(model, kinematic_file);
         internal::load_inertial_params(model, inertial_file);
         internal::load_constraint_params(model, model.urdf_file);
+
+        // Motor-armature reflected inertia for the xArm 6. The link inertial
+        // YAMLs describe rigid-body inertias only; harmonic-drive rotor inertia
+        // is omitted, making Lambda_rot orders of magnitude too small without
+        // this correction. Values are currently only approximate estimates.
+        //
+        // TODO: populate joint_armature (and matching MJCF <joint armature=...>)
+        // for xarm5, xarm7, lite6, uf850 to enable proper torque-mode FF tracking.
+        if (dof == 6 && robot_type != "lite" && robot_type != "uf850") {
+            model.joint_armature.resize(6);
+            model.joint_armature << 1.0, 0.5, 0.2, 0.07, 0.03, 0.02;
+        }
 
         return model;
     }

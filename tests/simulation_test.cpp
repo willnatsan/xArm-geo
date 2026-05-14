@@ -304,31 +304,30 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
     p_baseline.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { p_baseline.attach_collision(col_model, col_data); }
 
-    // Dynamic pair (JointTorque output). K_D is critically-damped relative to K_P.
+    // Dynamic pair (JointTorque output). Emprically tuned gains.
+    //   K_p_pos = 4000 N/m       (omega_n_lin ~ 28 rad/s)
+    //   K_p_rot = 60  N*m/rad    (omega_n_rot ~ 49 rad/s; overcomes friction floor)
+    //   K_d_lin = 280 N*s/m      (2*sqrt(4000*5)   ~ 283)
+    //   K_d_ang = 2.4 N*m*s/rad  (2*sqrt(60*0.025) ~ 2.4)
     xarm_geo::controllers::GeometricPDController pd_controller(model);
-    pd_controller.gains.kp_pos.setConstant(100.0);
-    pd_controller.gains.kp_rot.setConstant(50.0);
-    pd_controller.gains.kd_lin.setConstant(20.0);
-    pd_controller.gains.kd_ang.setConstant(10.0);
+    pd_controller.gains.kp_pos.setConstant(4000.0);
+    pd_controller.gains.kp_rot.setConstant(60.0);
+    pd_controller.gains.kd_lin.setConstant(280.0);
+    pd_controller.gains.kd_ang.setConstant(2.4);
     pd_controller.use_feedforward = params.feedforward;
     pd_controller.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { pd_controller.attach_collision(col_model, col_data); }
 
     xarm_geo::controllers::EuclideanPDController pd_baseline(model);
-    pd_baseline.gains.kp_pos.setConstant(100.0);
-    pd_baseline.gains.kp_rot.setConstant(50.0);
-    pd_baseline.gains.kd_lin.setConstant(20.0);
-    pd_baseline.gains.kd_ang.setConstant(10.0);
+    pd_baseline.gains.kp_pos.setConstant(4000.0);
+    pd_baseline.gains.kp_rot.setConstant(60.0);
+    pd_baseline.gains.kd_lin.setConstant(280.0);
+    pd_baseline.gains.kd_ang.setConstant(2.4);
     pd_baseline.use_feedforward = params.feedforward;
     pd_baseline.constraint_aware = params.constraint_aware;
     if (params.constraint_aware) { pd_baseline.attach_collision(col_model, col_data); }
 
     xarm_geo::JointTorque torque_target(model.dof);
-    // ctx.dt must reflect the actual controller invocation period
-    // (kSimulationControlPeriodS = 8 ms at decim 4), not the physics step
-    // (2 ms).  GeometricPIController and GeometricPIDController consume
-    // ctx.dt for integrator accumulation; using physics_dt here would
-    // integrate at 1/kSafetyDecimationFactor of the intended rate.
     const auto dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(kSimulationControlPeriodS));
 
@@ -445,8 +444,6 @@ auto run_simulation(xarm_geo::Model &model, xarm_geo::Data &data,
             sim.update_scene();
             sim.render();
             last_render_t = t;
-            // No sleep here: render is best-effort; the per-step sleep_until
-            // below provides real-time pacing.
         }
 
         // Pace to real-time: sleep until one physics_dt has elapsed since the

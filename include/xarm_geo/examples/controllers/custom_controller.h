@@ -31,8 +31,11 @@ namespace xarm_geo::controllers {
     // (joint midpoints by default).
     //
     // Control law mirrors GeometricPController:
-    //   xi_c = Ad_{g_e} * xi_d - nabla Phi(g_e)    (use_feedforward = true)
-    //   xi_c =                 - nabla Phi(g_e)    (use_feedforward = false)
+    //   xi_c = Ad_{g_e} * xi_d + nabla Phi(g_e)    (use_feedforward = true)
+    //   xi_c =                   nabla Phi(g_e)    (use_feedforward = false)
+    //
+    // se3_*_gradient returns +nabla Phi; see feedback.h for why body-frame
+    // descent adds +nabla Phi under the left-error convention g_e = g^{-1} g_d.
 
     class PostureBiasedPController {
     public:
@@ -95,9 +98,9 @@ namespace xarm_geo::controllers {
             const manifold::SE3::Twist ad_xi_d = g_e.Ad() * ctx.ref.twist;
             manifold::SE3::Twist cmd_twist;
             if (use_feedforward) {
-                cmd_twist = ad_xi_d - grad;
+                cmd_twist = ad_xi_d + grad;
             } else {
-                cmd_twist = -grad;
+                cmd_twist = grad;
             }
 
             // --- Augmented Optimal IDK Task Set ---

@@ -19,9 +19,6 @@ namespace xarm_geo {
         double q_min = -2 * std::numbers::pi;
         double q_max = 2 * std::numbers::pi;
         double q_vel_max = std::numbers::pi;
-
-        // Symmetric torque bound |tau_i| <= tau_max (N*m).
-        // From URDF <limit effort="..."> if present, else +inf.
         double tau_max = std::numeric_limits<double>::infinity();
     };
 
@@ -43,6 +40,11 @@ namespace xarm_geo {
 
         // --- Dynamic Parameters ---
         std::vector<manifold::SE3::SpatialInertia> spatial_inertias_link;
+
+        // Per-joint reflected motor + harmonic-drive inertia (kg*m^2).
+        // Added diagonally to M(q) by compute_mass_matrix; CRBA's link-only
+        // pass omits this rotor contribution. Default empty -> no-op.
+        Eigen::VectorXd joint_armature;
 
         // World-frame gravitational acceleration (m/s^2). Default zero
         // assumes external compensation; set (0, 0, -9.81) for RNEA / ASIF.

@@ -107,10 +107,17 @@ The control law itself is composed from free functions and types in:
 ### xarm_geo/control/feedback.h -- SE(3) feedback primitives
 
   se3_lie_group_gradient(g_e, kp_pos, kp_rot)
-    Trace-function gradient nabla Phi(g_e); almost-globally stable.
+    Returns +nabla Phi(g_e) in the body frame (Bullo-Murray trace-function
+    gradient). Almost-globally stable. See § Common Pitfalls for sign usage.
   se3_lie_algebra_gradient(g_e, kp_pos, kp_rot)
-    Log-map gradient with Jacobian correction; globally stable, but
-    discontinuous at theta = pi. Do not use for integral terms.
+    Returns +nabla Phi_log (log-map gradient with right-Jacobian correction).
+    Discontinuous at theta = pi; do not use for integral terms.
+  se3_lie_group_gradient_wrench(g_e, kp_pos, kp_rot)
+    Wrench-typed variant of se3_lie_group_gradient. Use in dynamic controllers
+    where the gradient is composed with damping into a body-frame wrench.
+  se3_lie_algebra_gradient_wrench(g_e, kp_pos, kp_rot)
+    Wrench-typed variant of se3_lie_algebra_gradient. Same caveats apply
+    (discontinuous at theta = pi; do not use for integral terms).
   se3_velocity_error(body_twist, g_e, target_twist_body)
     Body-frame xi_e = xi - Ad_{g_e} * xi_d.
   se3_transported_acc(g_e, xi_e, ad_xi_d, spatial_acc_body)
@@ -155,12 +162,17 @@ patterns).
 
 File: include/xarm_geo/examples/controllers/geometric_pd_controller.h
 
-Control law (Maithripala 2006, operational-space PD with feedforward):
+Control law (Bullo-Murray 1999 / Maithripala 2006, body-frame PD + FF):
 
-  F_task = - nabla Phi(g_e)
-           - K_D * xi_e
-           + Lambda(q) * d/dt(Ad * xi_d)
-           - ad_{xi_e}^* * Lambda(q) * Ad * xi_d     [if use_feedforward]
+  F_task = nabla Phi(g_e) - K_d * xi_e              [F_PD, wrench-direct]
+         + Lambda(q) * d/dt(Ad_{g_e} * xi_d)         [F_FF, if enabled]
+
+se3_*_gradient_wrench returns +nabla Phi as a body-frame Wrench (see
+§ Common Pitfalls for sign usage). Lambda(q) is computed via
+compute_op_space_inertia with DLS regularisation.
+d/dt(Ad_{g_e} * xi_d) is provided by se3_transported_acc (includes the
+ad-coupling term -ad_{xi_e}(Ad xi_d) so the FF residual vanishes at
+perfect tracking).
 
 The hook:
 
@@ -172,32 +184,28 @@ auto compute_command_wrench(const Model & /*model*/, Data & /*data*/,
     -> bool override {
 
     const manifold::SE3::Twist body_twist = kin.body_jacobian() * ctx.fb.v;
-
     const manifold::SE3 g_e = kin.ee_pose().inverse() * ctx.ref.pose;
-    const manifold::SE3::Twist grad =
+    const manifold::SE3::Wrench grad =
         (gradient == GradientType::LieAlgebra)
-            ? se3_lie_algebra_gradient(g_e, gains.kp_pos, gains.kp_rot)
-            : se3_lie_group_gradient(g_e, gains.kp_pos, gains.kp_rot);
+            ? se3_lie_algebra_gradient_wrench(g_e, gains.kp_pos, gains.kp_rot)
+            : se3_lie_group_gradient_wrench(g_e, gains.kp_pos, gains.kp_rot);
     ad_xi_d_ = g_e.Ad() * ctx.ref.twist;
     xi_e_    = body_twist - ad_xi_d_;
 
+    // F_PD = nabla Phi(g_e) - K_d * xi_e
     cmd_wrench.head<3>().noalias() =
-        -grad.head<3>() - gains.kd_lin.cwiseProduct(xi_e_.head<3>());
+        grad.head<3>() - gains.kd_lin.cwiseProduct(xi_e_.head<3>());
     cmd_wrench.tail<3>().noalias() =
-        -grad.tail<3>() - gains.kd_ang.cwiseProduct(xi_e_.tail<3>());
+        grad.tail<3>() - gains.kd_ang.cwiseProduct(xi_e_.tail<3>());
 
+    // F_FF = Lambda(q) * d/dt(Ad_{g_e} * xi_d)
     if (use_feedforward) {
         M_llt_.compute(dyn.M());
-        if (M_llt_.info() == Eigen::Success) {
-            M_inv_Jt_.noalias() = M_llt_.solve(kin.body_jacobian().transpose());
-            lambda_.noalias()   = kin.body_jacobian() * M_inv_Jt_;
-            lambda_             = lambda_.inverse().eval();
+        if (compute_op_space_inertia(M_llt_, kin.body_jacobian(), lambda_,
+                                     M_inv_Jt_, lambda_damping)) {
             d_ad_xi_d_ = se3_transported_acc(g_e, xi_e_, ad_xi_d_,
                                              ctx.ref.spatial_acc);
-            const manifold::SE3::Twist Lambda_ad_xi_d = lambda_ * ad_xi_d_;
-            cmd_wrench.noalias() += lambda_ * d_ad_xi_d_;
-            cmd_wrench.noalias() -=
-                manifold::SE3::ad(xi_e_).transpose() * Lambda_ad_xi_d;
+            cmd_wrench += manifold::SE3::Wrench(lambda_ * d_ad_xi_d_);
         }
     }
     return true;
@@ -212,8 +220,8 @@ Key points:
   members. Zero allocation per tick.
 - Body frame throughout: g_e = g^{-1} * g_d, xi_e in body frame,
   wrench in body frame, base projects via J_b^T * cmd_wrench.
-- Dual-adjoint coupling on xi_e (not the full twist): FF residual
-  vanishes at perfect tracking (xi_e = 0); passivity preserved.
+- compute_op_space_inertia uses Cholesky + DLS fallback; silently skips
+  FF if M(q) is not positive definite.
 
 ---
 
@@ -424,6 +432,23 @@ Mixing in space-frame quantities compiles but produces wrong commands.
 data.q is canonical; the base sets it from ctx.fb.q before the hook.
 Writing to it mid-hook corrupts the cache and any subsequent free-
 function calls. Use a local VectorXd for hypothetical configurations.
+
+### Subtracting Instead of Adding the Gradient
+
+Both `se3_lie_group_gradient` and `se3_lie_algebra_gradient` return `+nabla Phi`
+in the body frame. Under the left-error convention `g_e = g^{-1} g_d`,
+body-frame descent is achieved by **adding** the returned value:
+
+```
+cmd_twist  = ad_xi_d + grad        (kinematic P law)
+cmd_wrench = grad - K_d * xi_e     (dynamic PD law)
+```
+
+Writing `ad_xi_d - grad` or `-grad - K_d * xi_e` flips the proportional
+term into a repulsive force: the controller pushes the EE away from the
+setpoint and any small perturbation grows without bound. The naive
+"subtract the gradient" reflex from Euclidean gradient descent is wrong
+here; see `feedback.h` for the chain-rule derivation through `g_e`.
 
 ### Carrying Integrator State Across Trajectories
 

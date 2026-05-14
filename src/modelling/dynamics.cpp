@@ -125,13 +125,20 @@ namespace xarm_geo {
             data.M(i, i) = data.crba.F_scratch.dot(model.screw_axes_local[i]);
 
             for (int j = i; j >= 1; --j) {
-                const auto Ad_T = data.rnea.T_i_parent_cache[j].Ad().transpose();
-                data.crba.F_scratch = Ad_T * data.crba.F_scratch;
+                const manifold::SE3::TangentMap Ad = data.rnea.T_i_parent_cache[j].Ad();
+                data.crba.F_scratch = Ad.transpose() * data.crba.F_scratch;
 
                 const double m_ij = data.crba.F_scratch.dot(model.screw_axes_local[j - 1]);
                 data.M(i, j - 1) = m_ij;
                 data.M(j - 1, i) = m_ij;
             }
+        }
+
+        // Add motor-armature reflected inertia diagonally (Featherstone §6.1).
+        // CRBA's link-only pass omits rotor inertia. Guard allows callers that
+        // omit joint_armature to see no change.
+        if (model.joint_armature.size() == model.dof) {
+            for (int i = 0; i < model.dof; ++i) { data.M(i, i) += model.joint_armature[i]; }
         }
     };
 

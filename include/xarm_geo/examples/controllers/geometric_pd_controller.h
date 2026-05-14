@@ -9,27 +9,37 @@
 #include <xarm_geo/control/feedback.h>
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/system.h>
-#include <xarm_geo/utils/debug.h>
 
 namespace xarm_geo::controllers {
 
-    // --- Geometric PD Controller (Maithripala) ---
+    // --- Geometric PD Controller (Bullo-Murray / Maithripala / Seo) ---
     //
-    // SE(3)-tracking dynamic PD. Body-frame command wrench:
-    //   F_task = -nabla Phi(g_e) - K_D * xi_e
-    //          + ( Lambda(q) * d/dt(Ad * xi_d)
-    //              - ad_{xi_e}^* * Lambda(q) * Ad * xi_d )         [if use_feedforward]
+    // SE(3)-tracking dynamic PD on the Lie group, in the body frame of g.
+    // Combines:
+    //   - Maithripala (TAC 2006) body-frame configuration error g_e = g^{-1} g_d
+    //     and velocity error xi_e = xi - Ad_{g_e} xi_d.
+    //   - Bullo & Murray (Automatica 1999) PD-plus-feedforward structure:
+    //         F_PD = nabla Phi(g_e) - K_d * xi_e           (wrench-direct)
+    //         F_FF = Lambda(q) * d/dt(Ad_{g_e} xi_d)       (Lambda-scaled FF)
+    //     The PD term is NOT premultiplied by Lambda; only the feedforward
+    //     reference-acceleration term carries the operational-space inertia.
+    //   - Seo et al. (IFAC 2023) left-invariant SE(3) gradient with matrix
+    //     gains and proof of asymptotic stability for the manipulator case.
     //
-    // The dual-adjoint coupling is evaluated at the velocity error xi_e, so
-    // the FF residual vanishes at perfect tracking and the closed loop is
-    // passive. See Maithripala et al. (2006).
+    // Body-frame command wrench:
+    //
+    //     cmd_wrench = nabla Phi(g_e) - K_d * xi_e                    [F_PD]
+    //                + Lambda(q) * d/dt(Ad_{g_e} xi_d)                [F_FF, if enabled]
+    //
+    // se3_*_gradient_wrench returns +nabla Phi as a body-frame Wrench; see
+    // feedback.h for the sign convention and chain-rule derivation through g_e.
 
     class GeometricPDController final : public DynamicTaskControllerBase {
     public:
         static constexpr std::string_view kName = "GeometricPDController";
 
-        // Recommended default; users may override after construction (e.g. None
-        // when running against xArm SDK gravity compensation).
+        // Recommended default; users may override after construction
+        // (e.g. None when running against xArm SDK gravity compensation).
         static constexpr BiasCompensation kRecommendedBiasCompensation = BiasCompensation::Full;
 
         explicit GeometricPDController(const Model &model)
@@ -44,6 +54,7 @@ namespace xarm_geo::controllers {
         SE3FeedbackGains gains;
         bool use_feedforward = true;
         GradientType gradient = GradientType::LieGroup;
+        double lambda_damping = 0.05;  // Damped least-squares regularisation for Lambda(q).
 
     protected:
         auto compute_command_wrench(const Model & /*model*/, Data & /*data*/, KinematicsCache &kin,
@@ -53,35 +64,26 @@ namespace xarm_geo::controllers {
             // Body-frame configuration error, transported reference twist, velocity error.
             const manifold::SE3::Twist body_twist = kin.body_jacobian() * ctx.fb.v;
             const manifold::SE3 g_e = kin.ee_pose().inverse() * ctx.ref.pose;
-            const manifold::SE3::Twist grad =
+            const manifold::SE3::Wrench grad =
                 (gradient == GradientType::LieAlgebra)
-                    ? se3_lie_algebra_gradient(g_e, gains.kp_pos, gains.kp_rot)
-                    : se3_lie_group_gradient(g_e, gains.kp_pos, gains.kp_rot);
+                    ? se3_lie_algebra_gradient_wrench(g_e, gains.kp_pos, gains.kp_rot)
+                    : se3_lie_group_gradient_wrench(g_e, gains.kp_pos, gains.kp_rot);
             ad_xi_d_ = g_e.Ad() * ctx.ref.twist;
             xi_e_ = body_twist - ad_xi_d_;
 
-            // P + D wrench, per-axis K_D on linear/angular.
+            // F_PD = nabla Phi(g_e) - K_d * xi_e
             cmd_wrench.head<3>().noalias() =
-                -grad.head<3>() - gains.kd_lin.cwiseProduct(xi_e_.head<3>());
+                grad.head<3>() - gains.kd_lin.cwiseProduct(xi_e_.head<3>());
             cmd_wrench.tail<3>().noalias() =
-                -grad.tail<3>() - gains.kd_ang.cwiseProduct(xi_e_.tail<3>());
+                grad.tail<3>() - gains.kd_ang.cwiseProduct(xi_e_.tail<3>());
 
-            // F_FF = Lambda * d/dt(Ad * xi_d) - ad_{xi_e}^* * Lambda * (Ad * xi_d).
+            // F_FF: Lambda(q) * d/dt(Ad_{g_e} xi_d)
             if (use_feedforward) {
                 M_llt_.compute(dyn.M());
-
-                if (M_llt_.info() == Eigen::Success) {
-                    M_inv_Jt_.noalias() = M_llt_.solve(kin.body_jacobian().transpose());
-                    lambda_.noalias() = kin.body_jacobian() * M_inv_Jt_;
-                    lambda_ = lambda_.inverse().eval();
-
+                if (compute_op_space_inertia(M_llt_, kin.body_jacobian(), lambda_, M_inv_Jt_,
+                                             lambda_damping)) {
                     d_ad_xi_d_ = se3_transported_acc(g_e, xi_e_, ad_xi_d_, ctx.ref.spatial_acc);
-
-                    const manifold::SE3::Twist Lambda_ad_xi_d = lambda_ * ad_xi_d_;
-                    cmd_wrench.noalias() += lambda_ * d_ad_xi_d_;
-                    cmd_wrench.noalias() -= manifold::SE3::ad(xi_e_).transpose() * Lambda_ad_xi_d;
-                } else {
-                    debug::log("Cholesky failed on M(q); FF dropped this tick");
+                    cmd_wrench += manifold::SE3::Wrench(lambda_ * d_ad_xi_d_);
                 }
             }
 

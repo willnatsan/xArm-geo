@@ -81,15 +81,6 @@ build = { cmd = [
   "build"
 ], depends-on = ["configure"] }
 
-# Memory Debugging Build (Address Sanitizer)
-build_asan = { depends-on = [
-  { task = "configure", args = [
-    "RelWithDebInfo",
-    "-fsanitize=address"
-  ] },
-  "build"
-] }
-
 # Release Mode Build
 build_release = { depends-on = [
   { task = "configure", args = ["Release"] },

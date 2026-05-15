@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -298,6 +299,29 @@ namespace xarm_geo::internal {
             }
         }
     }
+    // --- Joint Armature Lookup Table ---
+    //
+    // Returns the per-joint reflected motor + harmonic-drive inertia vector for
+    // the given (dof, robot_type) combination, or an empty vector if no values
+    // are available for that variant (build_model interprets empty as "no armature").
+    //
+    // Values are approximate estimates (proximal → distal joint order).
+    // TODO: Add estimates for remaining xArm Models
+    //
+    // sync_model_to_mujoco() mirrors these into MuJoCo at Simulation construction;
+    // the generated MJCF does NOT need per-joint armature attributes.
+    Eigen::VectorXd get_armature_for_robot(int dof, const std::string &robot_type) {
+        if (dof == 6 && robot_type != "lite" && robot_type != "uf850") {
+            Eigen::VectorXd a(6);
+            a << 1.0, 0.5, 0.2, 0.07, 0.03, 0.02;
+            return a;
+        }
+        // else if (dof == 7 && robot_type == "xarm")   { ... }
+        // else if (dof == 5 && robot_type == "xarm")   { ... }
+        // else if (dof == 6 && robot_type == "lite")   { ... }
+        // else if (dof == 6 && robot_type == "uf850")  { ... }
+        return {};  // no armature data for this variant
+    }
 }  // namespace xarm_geo::internal
 
 namespace xarm_geo {
@@ -320,17 +344,10 @@ namespace xarm_geo {
         internal::load_inertial_params(model, inertial_file);
         internal::load_constraint_params(model, model.urdf_file);
 
-        // Motor-armature reflected inertia for the xArm 6. The link inertial
-        // YAMLs describe rigid-body inertias only; harmonic-drive rotor inertia
-        // is omitted, making Lambda_rot orders of magnitude too small without
-        // this correction. Values are currently only approximate estimates.
-        //
-        // TODO: populate joint_armature (and matching MJCF <joint armature=...>)
-        // for xarm5, xarm7, lite6, uf850 to enable proper torque-mode FF tracking.
-        if (dof == 6 && robot_type != "lite" && robot_type != "uf850") {
-            model.joint_armature.resize(6);
-            model.joint_armature << 1.0, 0.5, 0.2, 0.07, 0.03, 0.02;
-        }
+        // Motor-armature reflected inertia. Link inertial YAMLs describe rigid-
+        // body inertias only; harmonic-drive rotor inertia is omitted, making
+        // Lambda_rot orders of magnitude too small without this correction.
+        model.joint_armature = internal::get_armature_for_robot(dof, robot_type);
 
         return model;
     }
@@ -367,4 +384,32 @@ namespace xarm_geo {
 
         return col_model;
     }
+
+    void sync_model_to_mujoco(const Model &model, mjModel *mj_model, mjData *mj_data) {
+        assert(mj_model != nullptr && "sync_model_to_mujoco: mj_model must not be null");
+        assert(mj_data != nullptr && "sync_model_to_mujoco: mj_data must not be null");
+
+        // Defensive check: DOF counts must match for a fixed-base robot.
+        // If they differ (e.g. free-floating base in MJCF), skip the sync and
+        // warn rather than silently writing to the wrong DOF indices.
+        if (model.dof != mj_model->nv) {
+            std::cerr << "[sync_model_to_mujoco] WARNING: model.dof (" << model.dof
+                      << ") != mj_model->nv (" << mj_model->nv << "); skipping armature sync.\n";
+            return;
+        }
+
+        // Mirror joint armature into MuJoCo's dof_armature array.
+        // For a fixed-base robot with 1-DOF joints, DOF index == joint index.
+        if (model.joint_armature.size() == model.dof) {
+            for (int i = 0; i < model.dof; ++i) {
+                mj_model->dof_armature[i] = model.joint_armature[i];
+            }
+        }
+
+        // Recompute all MuJoCo derived constants that depend on physical
+        // parameters (dof_invweight0, dof_M0, body_invweight0, etc.) so the
+        // solver's cached quantities stay consistent with the updated values.
+        mj_setConst(mj_model, mj_data);
+    }
+
 }  // namespace xarm_geo

@@ -16,6 +16,13 @@ namespace xarm_geo {
 
     // --- Constructors & Destructors ---
 
+    Simulation::Simulation(const Model &model) : Simulation(model, Config{}) {}
+
+    Simulation::Simulation(const Model &model, const Config &config)
+        : Simulation(model.mjcf_file, config) {
+        sync_model_to_mujoco(model, this->model, this->data);
+    }
+
     Simulation::Simulation(const std::string &mjcf_file) : Simulation(mjcf_file, Config{}) {}
 
     Simulation::Simulation(const std::string &mjcf_file, const Config &config) : config_(config) {

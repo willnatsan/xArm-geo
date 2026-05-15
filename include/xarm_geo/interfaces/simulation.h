@@ -11,6 +11,7 @@
 
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/interfaces/interface.h>
+#include <xarm_geo/utils/model_builder.h>
 
 namespace xarm_geo {
 
@@ -50,8 +51,15 @@ namespace xarm_geo {
 
         // --- Constructors & Destructor ---
 
+        // Preferred Constructor:
+        // Adds additional physical parameters missing from MJCF XML
+        // (i.e. Joint Armature)
+        explicit Simulation(const Model &model);
+        explicit Simulation(const Model &model, const Config &config);
+
         explicit Simulation(const std::string &mjcf_file);
         Simulation(const std::string &mjcf_file, const Config &config);
+
         ~Simulation();
 
         // --- Interface Concept: Lifecycle & State Reading ---

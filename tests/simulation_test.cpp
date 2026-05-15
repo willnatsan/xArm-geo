@@ -553,7 +553,7 @@ auto main(int argc, char *argv[]) -> int {
     if (params.torque_mode) { model.gravity = Eigen::Vector3d{0.0, 0.0, -9.81}; }
 
     xarm_geo::Data data(model);
-    xarm_geo::Simulation sim(model.mjcf_file);
+    xarm_geo::Simulation sim(model);
 
     xarm_geo::CollisionModel col_model = xarm_geo::build_collision_model(model, true);
     xarm_geo::CollisionData col_data(col_model);

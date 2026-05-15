@@ -16,18 +16,30 @@ namespace xarm_geo::controllers {
 
     // --- Geometric PI Controller ---
     //
-    // SE(3)-tracking kinematic PI. Mixed-state integral (Goodarzi et al. 2013);
-    // the integrator accumulates nabla Phi(g_e) through per-axis saturation
-    // for anti-windup:
-    //   xi_c     = Ad_{g_e} * xi_d + nabla Phi(g_e) - K_I * sat(e_I)
-    //   dot(e_I) = nabla Phi(g_e)
+    // SE(3)-tracking kinematic PI. Adds an intrinsic integral term (Bhat &
+    // Bernstein 2015) to GeometricPController's P + feedforward law, with
+    // per-axis back-calculation anti-windup. Body-frame command twist:
     //
-    // se3_lie_group_gradient returns +nabla Phi; see feedback.h for why
-    // body-frame descent adds (not subtracts) nabla Phi under g_e = g^{-1} g_d.
+    //   xi_c     = Ad_{g_e} * xi_d + nabla Phi(g_e) + K_I * sat(e_I)
+    //   dot(e_I) = nabla Phi(g_e)        (Bhat 2015 eq. 5; intrinsic-gradient integrand)
+    //   e_I      <- sat(e_I)             (back-calculation anti-windup)
     //
-    // Hardcoded to the Lie-group gradient -- the log-map gradient's branch
-    // cut near theta = pi makes it unsafe to integrate. Call reset() to zero
-    // the integrator between distinct trajectories.
+    // nabla Phi (se3_lie_group_gradient) is computed once and reused for both
+    // the P term and the integrand. The integral is ADDED (same sign as the P
+    // term): e_I accumulates +nabla Phi so K_I * sat(e_I) reinforces the
+    // proportional correction (see feedback.h).
+    //
+    // Why Bhat (not Goodarzi 2013): Goodarzi's dot(e_I) = xi_e + c2*e_R couples
+    // a velocity error to an attitude-error vector and carries a stability bound
+    // that depends on K_p. Bhat 2015 proves that the intrinsic-gradient integrand
+    // is covariant-derivative-correct on Lie groups and reduces to textbook PI in
+    // the Euclidean limit.
+    //
+    // Back-calculation anti-windup: e_I_ is replaced by sat(e_I_) each tick.
+    // sigma_lin / sigma_ang default to +inf (no clamping).
+    //
+    // Hardcoded to the Lie-group gradient (branch-cut-free). Call reset() to
+    // zero the integrator between trajectories.
 
     class GeometricPIController final : public KinematicTaskControllerBase {
     public:
@@ -38,6 +50,9 @@ namespace xarm_geo::controllers {
         }
 
         void reset() noexcept { e_I_.setZero(); }
+        [[nodiscard]] auto integrator_state() const noexcept -> const manifold::SE3::Twist & {
+            return e_I_;
+        }
 
         // --- Public Configuration ---
         SE3FeedbackGains gains;
@@ -56,8 +71,8 @@ namespace xarm_geo::controllers {
             const manifold::SE3::Twist grad =
                 se3_lie_group_gradient(g_e, gains.kp_pos, gains.kp_rot);
 
-            // Mixed-state integrator: dot(e_I) = nabla Phi(g_e).
-            // grad = +nabla Phi, so accumulate directly.
+            // Bhat-intrinsic integrand: dot(e_I) = nabla Phi(g_e).
+            // Reuses the same gradient as the P term; no velocity-error coupling.
             const double dt = std::chrono::duration<double>(ctx.dt).count();
             e_I_.noalias() += grad * dt;
 
@@ -70,11 +85,15 @@ namespace xarm_geo::controllers {
             integral_term.head<3>() = gains.ki_lin.cwiseProduct(e_I_sat.head<3>());
             integral_term.tail<3>() = gains.ki_ang.cwiseProduct(e_I_sat.tail<3>());
 
+            // Back-calculation anti-windup: clamp the raw integrator state to the
+            // saturated value so e_I_ cannot grow unboundedly during saturation.
+            e_I_ = e_I_sat;
+
             const manifold::SE3::Twist ad_xi_d = g_e.Ad() * ctx.ref.twist;
             if (use_feedforward) {
-                cmd_twist = ad_xi_d + grad - integral_term;
+                cmd_twist = ad_xi_d + grad + integral_term;
             } else {
-                cmd_twist = grad - integral_term;
+                cmd_twist = grad + integral_term;
             }
 
             return true;

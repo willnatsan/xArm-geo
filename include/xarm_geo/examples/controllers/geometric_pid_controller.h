@@ -12,29 +12,34 @@
 
 namespace xarm_geo::controllers {
 
-    // --- Geometric PID Controller (Bullo-Murray / Maithripala / Seo + Goodarzi integrator) ---
+    // --- Geometric PID Controller (Bullo-Murray / Maithripala / Seo + Bhat integrator) ---
     //
-    // SE(3)-tracking dynamic PID, mirroring GeometricPDController's wrench-
-    // direct PD + Lambda-scaled FF structure (Bullo-Murray 1999 / Maithripala
-    // 2006 / Seo 2023) and adding a Goodarzi-style mixed-state integrator with
-    // per-axis anti-windup saturation. Body-frame law:
+    // SE(3)-tracking dynamic PID. Builds on GeometricPDController's wrench-
+    // direct PD + Lambda-scaled FF (Bullo-Murray 1999 / Maithripala 2006 /
+    // Seo 2023) and adds an intrinsic integral term (Bhat & Bernstein 2015):
+    // Body-frame law:
     //
-    //     cmd_wrench = nabla Phi(g_e) - K_d * xi_e - K_I * sat(e_I)         [F_PID]
-    //                + Lambda(q) * d/dt(Ad_{g_e} xi_d)                       [F_FF, if enabled]
+    //     cmd_wrench = nabla Phi(g_e) - K_d * xi_e + K_I * sat(e_I)         [F_PID]
+    //                + Lambda(q) * d/dt(Ad_{g_e} xi_d)                      [F_FF, if enabled]
     //
-    //     dot(e_I) = xi_e + c2 * nabla Phi(g_e)             (Goodarzi mixed state; c2=0 default)
+    //     dot(e_I) = nabla Phi(g_e)        (Bhat 2015 eq. 5; intrinsic-gradient integrand)
+    //     e_I      <- sat(e_I)             (back-calculation anti-windup)
     //
-    // se3_lie_group_gradient_wrench returns +nabla Phi as a body-frame Wrench;
-    // see feedback.h for the sign convention and chain-rule derivation through g_e.
+    // nabla Phi (se3_lie_group_gradient) is computed once and reused for both
+    // the P term and the integrand. The integral is ADDED (not subtracted):
+    // e_I accumulates +nabla Phi so K_I * sat(e_I) has the same sign as the P
+    // term, augmenting it (see feedback.h).
     //
-    // The integrator term is wrench-direct (same dimensional convention as
-    // the P and D terms), so K_I carries physical units of N/s for the linear
-    // sub-block and N*m/s for the angular sub-block.
+    // Integrand is Bhat-intrinsic (not Goodarzi's dot(e_I) = xi_e + c2*e_R):
+    // Bhat 2015 proves the gradient integrand is covariant-derivative-correct
+    // on Lie groups and reduces to textbook PID in the Euclidean limit.
     //
-    // Hardcoded to the Lie-group gradient: the log-map branch cut at theta=pi
-    // makes integration unsafe at antipodes. Call reset() to zero the
-    // integrator between trajectories. See GeometricPDController for the
-    // detailed rationale on the wrench-direct PD + Lambda-scaled FF split.
+    // Back-calculation anti-windup: e_I_ is replaced by sat(e_I_) each tick.
+    // sigma_lin / sigma_ang default to +inf (no clamping).
+    //
+    // Hardcoded to the Lie-group gradient (branch-cut-free). Call reset() to
+    // zero the integrator between trajectories. See GeometricPDController for
+    // the wrench-direct PD + Lambda-scaled FF rationale.
 
     class GeometricPIDController final : public DynamicTaskControllerBase {
     public:
@@ -52,11 +57,13 @@ namespace xarm_geo::controllers {
         }
 
         void reset() noexcept { e_I_.setZero(); }
+        [[nodiscard]] auto integrator_state() const noexcept -> const manifold::SE3::Twist & {
+            return e_I_;
+        }
 
         // --- Public Configuration ---
         SE3FeedbackGains gains;
         bool use_feedforward = true;
-        double c2 = 0.0;  // mixed-state coupling (Goodarzi); 0 disables mixing
         Eigen::Vector3d sigma_lin =
             Eigen::Vector3d::Constant(std::numeric_limits<double>::infinity());
         Eigen::Vector3d sigma_ang =
@@ -72,29 +79,31 @@ namespace xarm_geo::controllers {
             // Body-frame configuration error, transported reference twist, velocity error.
             const manifold::SE3::Twist body_twist = kin.body_jacobian() * ctx.fb.v;
             const manifold::SE3 g_e = kin.ee_pose().inverse() * ctx.ref.pose;
-            const manifold::SE3::Wrench grad =
-                se3_lie_group_gradient_wrench(g_e, gains.kp_pos, gains.kp_rot);
+            const manifold::SE3::Twist grad =
+                se3_lie_group_gradient(g_e, gains.kp_pos, gains.kp_rot);
             ad_xi_d_ = g_e.Ad() * ctx.ref.twist;
             xi_e_ = body_twist - ad_xi_d_;
 
-            // Mixed-state integrator (Goodarzi):
-            //     dot(e_I) = xi_e + c2 * nabla Phi(g_e)
-            //              = xi_e + c2 * grad
-            // c2 = 0 disables mixing; default.
+            // Bhat-intrinsic integrand: dot(e_I) = nabla Phi(g_e).
             const double dt = std::chrono::duration<double>(ctx.dt).count();
-            e_I_.noalias() += (xi_e_ + c2 * grad.coeffs) * dt;
+            e_I_.noalias() += grad * dt;
 
             // Per-axis anti-windup saturation (defaults +inf -> no clamping).
             manifold::SE3::Twist e_I_sat;
             e_I_sat.head<3>() = e_I_.head<3>().cwiseMax(-sigma_lin).cwiseMin(sigma_lin);
             e_I_sat.tail<3>() = e_I_.tail<3>().cwiseMax(-sigma_ang).cwiseMin(sigma_ang);
 
-            // F_PID = nabla Phi - K_d * xi_e - K_I * sat(e_I)
+            // Back-calculation anti-windup: clamp the raw integrator state to the
+            // saturated value so e_I_ cannot grow unboundedly during saturation.
+            e_I_ = e_I_sat;
+
+            // F_PID = nabla Phi - K_d * xi_e + K_I * sat(e_I)
+            // Integral is added (same sign as P term) because e_I accumulates +nabla Phi.
             cmd_wrench.head<3>().noalias() = grad.head<3>() -
-                                             gains.kd_lin.cwiseProduct(xi_e_.head<3>()) -
+                                             gains.kd_lin.cwiseProduct(xi_e_.head<3>()) +
                                              gains.ki_lin.cwiseProduct(e_I_sat.head<3>());
             cmd_wrench.tail<3>().noalias() = grad.tail<3>() -
-                                             gains.kd_ang.cwiseProduct(xi_e_.tail<3>()) -
+                                             gains.kd_ang.cwiseProduct(xi_e_.tail<3>()) +
                                              gains.ki_ang.cwiseProduct(e_I_sat.tail<3>());
 
             // F_FF: Lambda(q) * d/dt(Ad_{g_e} xi_d)

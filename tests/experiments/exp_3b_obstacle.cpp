@@ -88,9 +88,9 @@ namespace {
     constexpr double kLineHalfExtent = 0.20;  // metres
 
     // Obstacle sphere radius.
-    constexpr double kObstacleRadius = 0.07;  // metres
+    constexpr double kObstacleRadius = 0.10;  // metres
 
-    constexpr double kObstacleZOffset = 0.01;  // metres
+    constexpr double kObstacleZOffset = 0.05;  // metres
 
     // Trajectory duration.
     constexpr double kTrajDuration = 8.0;  // seconds

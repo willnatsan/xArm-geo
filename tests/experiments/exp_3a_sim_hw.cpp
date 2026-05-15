@@ -79,10 +79,25 @@ namespace {
     constexpr double kHalfSpeed = 2.0;
 
     // Torque-mode gains (critically damped; from validate_torque.cpp).
+    // Used for simulation Variant B where torque is applied directly.
     constexpr double kKpPos = 4000.0;
     constexpr double kKpRot = 60.0;
     constexpr double kKdLin = 280.0;
     constexpr double kKdAng = 2.4;
+
+    // Hardware torque-mode gains for Variant D (admittance layer).
+    // The admittance map converts tau -> v = tau / D_v, so the effective
+    // position stiffness seen by the arm is kp / D_v (rad/s per unit error).
+    // The sim gains above would give ~800 (m/s)/m with D_v = 5, saturating
+    // q_vel_max constantly.  These are 10x lower to keep velocities well within
+    // the URDF limit of pi rad/s under typical tracking errors.
+    // Scale kd proportionally (kd ~= 2*sqrt(kp) ratio preserved) to maintain
+    // approximate critical damping through the admittance loop.
+    // Tune D_v (--damping flag) and these gains together on hardware.
+    constexpr double kKpPosHw = 400.0;
+    constexpr double kKpRotHw = 6.0;
+    constexpr double kKdLinHw = 28.0;
+    constexpr double kKdAngHw = 0.24;
 
     // Kinematic-mode gains.
     constexpr double kKpPosKin = 8.0;
@@ -469,12 +484,17 @@ namespace {
         if (!run_joint_ptp_hw(hw, model, data, joint_ctrl, a_traj, state, vel)) { return false; }
 
         controllers::GeometricPDController ctrl(model);
-        ctrl.gains.kp_pos.setConstant(kKpPos);
-        ctrl.gains.kp_rot.setConstant(kKpRot);
-        ctrl.gains.kd_lin.setConstant(kKdLin);
-        ctrl.gains.kd_ang.setConstant(kKdAng);
+        ctrl.gains.kp_pos.setConstant(kKpPosHw);
+        ctrl.gains.kp_rot.setConstant(kKpRotHw);
+        ctrl.gains.kd_lin.setConstant(kKdLinHw);
+        ctrl.gains.kd_ang.setConstant(kKdAngHw);
         ctrl.use_feedforward = true;
         ctrl.constraint_aware = true;
+        // On hardware the xArm SDK applies internal gravity compensation, so we
+        // must not add g(q) or h(q,v) again here.  Full would double-count gravity
+        // and cause the arm to drift at rest (non-zero tau -> non-zero v via
+        // admittance even with zero pose error).
+        ctrl.bias_compensation = BiasCompensation::None;
         ctrl.attach_collision(col_model, col_data);
 
         AdmittanceLayer admittance(model.dof, admittance_damping);

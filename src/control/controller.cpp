@@ -57,34 +57,28 @@ namespace xarm_geo {
             const OptimalIKStatus status = optimal_inverse_diff_kinematics(
                 model, data, *col_model_, *col_data_, cmd_twist, optimal_ik_options);
 
-            if (status != OptimalIKStatus::OK) {
+            if (status != OptimalIKStatus::OK && status != OptimalIKStatus::RELAXED) {
                 debug::log("optimal_inverse_diff_kinematics failed");
-                // Failure-path diagnostics: record the attempted pre-QP command in
-                // v_des, zero v_safe (no certified command was produced), and report
-                // the actual failure status so logged rows are not stale/misleading.
                 diag_.v_ctrl = v_des_scratch;
                 diag_.v_des = v_des_scratch;
                 diag_.v_safe = Eigen::VectorXd::Zero(model.dof);
                 diag_.optik_invoked = true;
                 diag_.optik_status = status;
                 diag_.optik_modified = false;
+                diag_.optik_delta = 0.0;
                 return to_controller_status(status);
             }
         }
 
-        out.v = data.v_out;  // post-QP (or unchanged DLS when !constraint_aware)
+        out.v = data.v_out;
 
-        // Populate per-tick diagnostics.
-        //
-        // v_ctrl / v_des == pre-QP DLS solution; v_safe == post-QP (or equal to
-        // v_des when constraint_aware is false and no QP ran).  optik_modified is
-        // now meaningful: non-zero iff the QP actually changed the command.
         diag_.v_ctrl = v_des_scratch;
         diag_.v_des = v_des_scratch;
         diag_.v_safe = data.v_out;
         diag_.optik_invoked = constraint_aware;
         diag_.optik_status = OptimalIKStatus::OK;
         diag_.optik_modified = constraint_aware && ((diag_.v_safe - diag_.v_des).norm() > 1e-9);
+        diag_.optik_delta = 0.0;  // not exposed from the convenience overload path
 
         return ControllerStatus::OK;
     }
@@ -152,13 +146,9 @@ namespace xarm_geo {
                 return ControllerStatus::NOT_CONFIGURED;
             }
 
-            // Ensure M and h are populated. The cache is a no-op when the hook
-            // already accessed them (e.g. via feedforward or full bias compensation);
-            // otherwise each does at most one RNEA pass here.
             (void)dyn.M();
             (void)dyn.h();
 
-            // Default barrier trio (same gains as the convenience overload).
             DynPositionBarrier pbar(model);
             pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
             pbar.alpha_1 = asif_defaults::kBarrierAlpha1;
@@ -170,19 +160,13 @@ namespace xarm_geo {
                                      asif_defaults::kCollisionActivationDistance);
             cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
             cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
-            // Forward per-pair override from asif_options; ignored when empty.
             cbar.per_pair_activation_distance = asif_options.per_pair_activation_distance;
 
-            // Collision pre-requisites for DynCollisionBarrier.  Use cbar's
-            // max_activation_distance() as the AABB-cull threshold so per-pair
-            // overrides (e.g. external obstacles at larger activation) are not culled.
             update_geometry_poses(model, data, *col_model_, *col_data_);
             (void)compute_min_distance(*col_model_, *col_data_, cbar.max_activation_distance());
 
             const DynamicBarrier *bar_ptrs[3] = {&pbar, &vbar, &cbar};
 
-            // Auto-populate symmetric torque box from model limits if the caller
-            // left it empty; mirrors the convenience overload's behaviour.
             ASIFOptions opts_eff = asif_options;
             if (opts_eff.tau_max.size() != model.dof) {
                 opts_eff.tau_max.resize(model.dof);
@@ -192,44 +176,51 @@ namespace xarm_geo {
             }
             if (opts_eff.tau_min.size() != model.dof) { opts_eff.tau_min = -opts_eff.tau_max; }
 
+            // Task-consistent cost: always on for task-mode dynamic controllers.
+            // Prevents the QP from exploiting cheap wrist torques to satisfy the CBF
+            // at the expense of orientation tracking (wrist-twist artefact).
+            // w_pos = 1.0, w_rot = 0.1 (≈ L_char^2 for L_char ≈ 0.32 m).
+            if (opts_eff.W_task.size() != 6) {
+                opts_eff.W_task.resize(6);
+                opts_eff.W_task << 1.0, 1.0, 1.0, 0.1, 0.1, 0.1;
+            }
+
             const ASIFStatus asif_status =
                 asif_filter(model, data, col_model_, col_data_, ctx.fb.v, tau_des_,
                             std::span<const DynamicBarrier *const>(bar_ptrs), tau_safe_, opts_eff);
 
-            if (asif_status != ASIFStatus::OK) {
+            if (asif_status != ASIFStatus::OK && asif_status != ASIFStatus::RELAXED) {
                 debug::log("asif_filter failed");
-                // Failure-path diagnostics: record tau_ctrl and tau_des (what was
-                // attempted), zero tau_safe (no certified command was produced), and
-                // report the actual ASIF status so logged rows are not stale/misleading.
                 diag_.tau_ctrl = tau_ctrl_;
                 diag_.tau_des = tau_des_;
                 diag_.tau_safe = Eigen::VectorXd::Zero(model.dof);
                 diag_.asif_invoked = true;
                 diag_.asif_status = asif_status;
                 diag_.asif_modified = false;
+                diag_.asif_delta = 0.0;
                 return to_controller_status(asif_status);
             }
 
             out.tau = tau_safe_;
 
-            // Populate per-tick diagnostics (ASIF active, success).
             diag_.tau_ctrl = tau_ctrl_;
             diag_.tau_des = tau_des_;
             diag_.tau_safe = tau_safe_;
             diag_.asif_invoked = true;
             diag_.asif_status = asif_status;
             diag_.asif_modified = (tau_safe_ - tau_des_).norm() > 1e-9;
+            diag_.asif_delta = 0.0;  // not exposed from the convenience overload path
         } else {
             out.tau = tau_des_;
             tau_safe_ = tau_des_;
 
-            // Populate per-tick diagnostics (ASIF bypassed).
             diag_.tau_ctrl = tau_ctrl_;
             diag_.tau_des = tau_des_;
             diag_.tau_safe = tau_des_;
             diag_.asif_invoked = false;
             diag_.asif_status = ASIFStatus::OK;
             diag_.asif_modified = false;
+            diag_.asif_delta = 0.0;
         }
 
         return ControllerStatus::OK;
@@ -278,13 +269,13 @@ namespace xarm_geo {
 
         out.v = v_ctrl_.v;
 
-        // Populate per-tick diagnostics.
         diag_.v_ctrl = v_ctrl_.v;
         diag_.v_des = v_ctrl_.v;
         diag_.v_safe = v_ctrl_.v;
         diag_.optik_invoked = false;
         diag_.optik_status = OptimalIKStatus::OK;
         diag_.optik_modified = rescaled;
+        diag_.optik_delta = 0.0;
 
         return ControllerStatus::OK;
     }
@@ -346,16 +337,12 @@ namespace xarm_geo {
             }
 
             // This base uses lazy kinematics; the composable asif_filter asserts
-            // body_jacobian is sized, so force a refresh here if not already done.
+            // body_jacobian must be sized for the composable asif_filter assert.
             kin.refresh();
 
-            // Ensure M and h are populated. The cache is a no-op when the hook
-            // already accessed them (e.g. via full bias compensation); otherwise
-            // each does at most one RNEA pass here.
             (void)dyn.M();
             (void)dyn.h();
 
-            // Default barrier trio (same gains as the convenience overload).
             DynPositionBarrier pbar(model);
             pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
             pbar.alpha_1 = asif_defaults::kBarrierAlpha1;
@@ -367,19 +354,13 @@ namespace xarm_geo {
                                      asif_defaults::kCollisionActivationDistance);
             cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
             cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
-            // Forward per-pair override from asif_options; ignored when empty.
             cbar.per_pair_activation_distance = asif_options.per_pair_activation_distance;
 
-            // Collision pre-requisites for DynCollisionBarrier.  Use cbar's
-            // max_activation_distance() as the AABB-cull threshold so per-pair
-            // overrides (e.g. external obstacles at larger activation) are not culled.
             update_geometry_poses(model, data, *col_model_, *col_data_);
             (void)compute_min_distance(*col_model_, *col_data_, cbar.max_activation_distance());
 
             const DynamicBarrier *bar_ptrs[3] = {&pbar, &vbar, &cbar};
 
-            // Auto-populate symmetric torque box from model limits if the caller
-            // left it empty; mirrors the convenience overload's behaviour.
             ASIFOptions opts_eff = asif_options;
             if (opts_eff.tau_max.size() != model.dof) {
                 opts_eff.tau_max.resize(model.dof);
@@ -388,45 +369,44 @@ namespace xarm_geo {
                 }
             }
             if (opts_eff.tau_min.size() != model.dof) { opts_eff.tau_min = -opts_eff.tau_max; }
+            // Joint-mode base: leave W_task empty (joint-space cost preserved).
 
             const ASIFStatus asif_status =
                 asif_filter(model, data, col_model_, col_data_, ctx.fb.v, tau_des_,
                             std::span<const DynamicBarrier *const>(bar_ptrs), tau_safe_, opts_eff);
 
-            if (asif_status != ASIFStatus::OK) {
+            if (asif_status != ASIFStatus::OK && asif_status != ASIFStatus::RELAXED) {
                 debug::log("asif_filter failed");
-                // Failure-path diagnostics: record tau_ctrl and tau_des, zero
-                // tau_safe (no certified command was produced), and report the
-                // actual ASIF status so logged rows are not stale/misleading.
                 diag_.tau_ctrl = tau_ctrl_.tau;
                 diag_.tau_des = tau_des_;
                 diag_.tau_safe = Eigen::VectorXd::Zero(model.dof);
                 diag_.asif_invoked = true;
                 diag_.asif_status = asif_status;
                 diag_.asif_modified = false;
+                diag_.asif_delta = 0.0;
                 return to_controller_status(asif_status);
             }
 
             out.tau = tau_safe_;
 
-            // Populate per-tick diagnostics (ASIF active, success).
             diag_.tau_ctrl = tau_ctrl_.tau;
             diag_.tau_des = tau_des_;
             diag_.tau_safe = tau_safe_;
             diag_.asif_invoked = true;
             diag_.asif_status = asif_status;
             diag_.asif_modified = (tau_safe_ - tau_des_).norm() > 1e-9;
+            diag_.asif_delta = 0.0;
         } else {
             out.tau = tau_des_;
             tau_safe_ = tau_des_;
 
-            // Populate per-tick diagnostics (ASIF bypassed).
             diag_.tau_ctrl = tau_ctrl_.tau;
             diag_.tau_des = tau_des_;
             diag_.tau_safe = tau_des_;
             diag_.asif_invoked = false;
             diag_.asif_status = ASIFStatus::OK;
             diag_.asif_modified = false;
+            diag_.asif_delta = 0.0;
         }
 
         return ControllerStatus::OK;

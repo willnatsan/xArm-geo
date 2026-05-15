@@ -10,6 +10,11 @@
 #include <xarm_geo/safety/asif.h>
 #include <xarm_geo/utils/debug.h>
 
+namespace {
+    // Threshold above which the slack variable is considered active.
+    constexpr double kSlackActiveThreshold = 1e-6;
+}  // namespace
+
 namespace xarm_geo {
 
     namespace {
@@ -51,8 +56,7 @@ namespace xarm_geo {
         const int dof = model.dof;
         auto &ws = data.asif;
 
-        // Cache M^-1 and M^-1 * h_bias once per call so all barriers can
-        // read rows of M_inv without re-factorising. O(n^3); fine for <=7 DOF.
+        // M^-1 and M^-1 * h cached once; reused by all barriers and the task-cost branch.
         ws.M_llt.compute(data.M);
         if (ws.M_llt.info() != Eigen::Success) {
             debug::log("Cholesky failed on data.M (not PD)");
@@ -61,32 +65,57 @@ namespace xarm_geo {
         ws.M_inv = ws.M_llt.solve(Eigen::MatrixXd::Identity(dof, dof));
         ws.M_inv_h = ws.M_llt.solve(data.h);
 
-        // Cost matrices: H = diag(W) + reg * I,  g = -diag(W) * tau_des.
-        const bool use_weight = (opts.weight.size() == dof);
-
-        ws.H.setZero(dof, dof);
-        ws.g.setZero(dof);
-        for (int i = 0; i < dof; ++i) {
-            const double w_i = use_weight ? opts.weight[i] : 1.0;
-            ws.H(i, i) = w_i + opts.regularisation;
-            ws.g[i] = -w_i * tau_des[i];
-        }
-
-        // Count CBF + torque-box rows, then assemble A, l, u.
+        // Count CBF rows; decide whether to use the slack augmentation.
         int n_cbf = 0;
         for (const DynamicBarrier *bar : barriers) {
             if (bar != nullptr) { n_cbf += bar->rows(); }
         }
+        const bool use_slack = std::isfinite(opts.relax_cost) && (n_cbf > 0);
+        const int n_dec = dof + (use_slack ? 1 : 0);
 
+        // --- Cost matrices ---
+        // Task-consistent form when W_task is supplied (size 6):
+        //     H = (J * M^-1)^T diag(W_task) (J * M^-1) + reg * I
+        //     g = -H * tau_des
+        // Otherwise joint-space form:
+        //     H = diag(w_i) + reg * I,   g = -diag(w_i) * tau_des
+        ws.H.setZero(n_dec, n_dec);
+        ws.g.setZero(n_dec);
+
+        const bool use_task_cost = (opts.W_task.size() == 6);
+        if (use_task_cost) {
+            // JM_inv = J * M^-1  (6 x dof)
+            const Eigen::MatrixXd JM_inv = data.body_jacobian * ws.M_inv;
+            // H_task = JM_inv^T * diag(W_task) * JM_inv  (dof x dof)
+            ws.H.topLeftCorner(dof, dof).noalias() =
+                JM_inv.transpose() * opts.W_task.asDiagonal() * JM_inv;
+            ws.H.topLeftCorner(dof, dof).diagonal().array() += opts.regularisation;
+            ws.g.head(dof).noalias() = -ws.H.topLeftCorner(dof, dof) * tau_des;
+        } else {
+            const bool use_weight = (opts.weight.size() == dof);
+            for (int i = 0; i < dof; ++i) {
+                const double w_i = use_weight ? opts.weight[i] : 1.0;
+                ws.H(i, i) = w_i + opts.regularisation;
+                ws.g[i] = -w_i * tau_des[i];
+            }
+        }
+
+        // Slack cost: relax_cost * delta^2.
+        if (use_slack) { ws.H(dof, dof) = opts.relax_cost; }
+
+        // --- Inequality rows ---
+        // CBF rows (one-sided):   A * tau - delta <= b   (slack col = -1)
+        // Torque box:             tau_min <= tau <= tau_max  (two-sided, no slack)
+        // Slack bound:            0 <= delta < inf
         const bool has_tau_max = (opts.tau_max.size() == dof);
         const bool has_tau_min = (opts.tau_min.size() == dof);
         const int n_box = (has_tau_max || has_tau_min) ? dof : 0;
-
-        const int n_in = n_cbf + n_box;
+        const int n_slack_box = use_slack ? 1 : 0;
+        const int n_in = n_cbf + n_box + n_slack_box;
 
         if (n_in > 0) {
-            if (ws.A.rows() != n_in || ws.A.cols() != dof) {
-                ws.A.resize(n_in, dof);
+            if (ws.A.rows() != n_in || ws.A.cols() != n_dec) {
+                ws.A.resize(n_in, n_dec);
                 ws.l.resize(n_in);
                 ws.u.resize(n_in);
             }
@@ -94,40 +123,46 @@ namespace xarm_geo {
 
             int row = 0;
 
-            // CBF rows: one-sided  A * tau <= b  (l = -inf, u = b).
+            // CBF rows — torque block + slack column.
             for (const DynamicBarrier *bar : barriers) {
                 if (bar == nullptr) { continue; }
                 const int r = bar->rows();
                 bar->compute_torque_constraint(model, data, col_model, col_data, v,
-                                               ws.A.middleRows(row, r), ws.u.segment(row, r));
+                                               ws.A.block(row, 0, r, dof), ws.u.segment(row, r));
                 ws.l.segment(row, r).setConstant(-std::numeric_limits<double>::infinity());
+                if (use_slack) { ws.A.block(row, dof, r, 1).setConstant(-1.0); }
                 row += r;
             }
 
-            // Torque box rows.
+            // Torque box — torque block only; slack column stays zero.
             if (n_box > 0) {
-                ws.A.middleRows(row, dof).setIdentity();
-                if (has_tau_min) {
-                    ws.l.segment(row, dof) = opts.tau_min;
-                } else {
-                    ws.l.segment(row, dof).setConstant(-std::numeric_limits<double>::infinity());
-                }
-                if (has_tau_max) {
-                    ws.u.segment(row, dof) = opts.tau_max;
-                } else {
-                    ws.u.segment(row, dof).setConstant(std::numeric_limits<double>::infinity());
-                }
+                ws.A.block(row, 0, dof, dof).setIdentity();
+                ws.l.segment(row, dof) =
+                    has_tau_min
+                        ? opts.tau_min
+                        : Eigen::VectorXd::Constant(dof, -std::numeric_limits<double>::infinity());
+                ws.u.segment(row, dof) =
+                    has_tau_max
+                        ? opts.tau_max
+                        : Eigen::VectorXd::Constant(dof, std::numeric_limits<double>::infinity());
+                row += dof;
+            }
+
+            // delta >= 0.
+            if (use_slack) {
+                ws.A(row, dof) = 1.0;
+                ws.l(row) = 0.0;
+                ws.u(row) = std::numeric_limits<double>::infinity();
             }
         } else {
-            ws.A.resize(0, dof);
+            ws.A.resize(0, n_dec);
             ws.l.resize(0);
             ws.u.resize(0);
         }
 
-        // First call -> init(); subsequent calls -> update() (reuses factorisation).
-        ensure_qp(ws, dof, /*m_eq=*/0, /*m_in=*/n_in);
+        ensure_qp(ws, n_dec, /*m_eq=*/0, /*m_in=*/n_in);
 
-        Eigen::MatrixXd A_eq(0, dof);
+        Eigen::MatrixXd A_eq(0, n_dec);
         Eigen::VectorXd b_eq(0);
 
         if (n_in > 0) {
@@ -138,7 +173,7 @@ namespace xarm_geo {
                 ws.qp->update(ws.H, ws.g, A_eq, b_eq, ws.A, ws.l, ws.u);
             }
         } else {
-            Eigen::MatrixXd A_in(0, dof);
+            Eigen::MatrixXd A_in(0, n_dec);
             Eigen::VectorXd l_in(0), u_in(0);
             if (!ws.initialised) {
                 ws.qp->init(ws.H, ws.g, A_eq, b_eq, A_in, l_in, u_in);
@@ -149,8 +184,7 @@ namespace xarm_geo {
         }
 
         ws.qp->settings.max_iter = opts.max_iters_qp;
-        // Use WARM_START_WITH_PREVIOUS_RESULT only after at least one successful
-        // solve. See Data::ASIFWorkspace::solved_once for the full rationale.
+        // Guard: only warm-start after at least one successful solve (proxsuite 0.7.2).
         ws.qp->settings.initial_guess =
             (opts.warmstart && ws.solved_once)
                 ? proxsuite::proxqp::InitialGuessStatus::WARM_START_WITH_PREVIOUS_RESULT
@@ -158,17 +192,19 @@ namespace xarm_geo {
 
         ws.qp->solve();
 
-        const auto status = ws.qp->results.info.status;
-        if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
+        const auto qp_status = ws.qp->results.info.status;
+        if (qp_status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
             ws.solved_once = true;
-            tau_safe = ws.qp->results.x;
-            return ASIFStatus::OK;
+            const Eigen::VectorXd &x = ws.qp->results.x;
+            tau_safe = x.head(dof);
+            const double delta = use_slack ? x[dof] : 0.0;
+            return (delta > kSlackActiveThreshold) ? ASIFStatus::RELAXED : ASIFStatus::OK;
         }
-        if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_PRIMAL_INFEASIBLE ||
-            status == proxsuite::proxqp::QPSolverOutput::PROXQP_DUAL_INFEASIBLE) {
+        if (qp_status == proxsuite::proxqp::QPSolverOutput::PROXQP_PRIMAL_INFEASIBLE ||
+            qp_status == proxsuite::proxqp::QPSolverOutput::PROXQP_DUAL_INFEASIBLE) {
             return ASIFStatus::INFEASIBLE;
         }
-        if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_MAX_ITER_REACHED) {
+        if (qp_status == proxsuite::proxqp::QPSolverOutput::PROXQP_MAX_ITER_REACHED) {
             return ASIFStatus::MAX_ITERS;
         }
         return ASIFStatus::ERROR;
@@ -194,7 +230,6 @@ namespace xarm_geo {
         DynCollisionBarrier cbar(model, col_model, asif_defaults::kCollisionActivationDistance);
         cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
         cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
-        // Forward per-pair override; ignored when empty (fallback to scalar default).
         cbar.per_pair_activation_distance = opts.per_pair_activation_distance;
 
         // Collision pre-requisites for DynCollisionBarrier.  Use cbar's reported

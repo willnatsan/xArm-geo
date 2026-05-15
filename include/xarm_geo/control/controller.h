@@ -78,6 +78,7 @@ namespace xarm_geo {
         -> ControllerStatus {
         switch (s) {
         case OptimalIKStatus::OK:
+        case OptimalIKStatus::RELAXED:  // slack was non-zero but QP solved; treat as success
             return ControllerStatus::OK;
         case OptimalIKStatus::INFEASIBLE:
             return ControllerStatus::INFEASIBLE;
@@ -92,6 +93,7 @@ namespace xarm_geo {
     [[nodiscard]] constexpr auto to_controller_status(ASIFStatus s) noexcept -> ControllerStatus {
         switch (s) {
         case ASIFStatus::OK:
+        case ASIFStatus::RELAXED:  // slack was non-zero but QP solved; treat as success
             return ControllerStatus::OK;
         case ASIFStatus::INFEASIBLE:
             return ControllerStatus::INFEASIBLE;
@@ -232,7 +234,8 @@ namespace xarm_geo {
         bool optik_invoked =
             false;  // true only for KinematicTaskControllerBase with constraint_aware
         bool optik_modified =
-            false;  // ||v_safe - v_des|| > eps (or rescale clipped for joint base)
+            false;                 // ||v_safe - v_des|| > eps (or rescale clipped for joint base)
+        double optik_delta = 0.0;  // slack magnitude from last QP solve (0 when strict)
     };
 
     // Dynamic bases (torque triplet).
@@ -244,6 +247,7 @@ namespace xarm_geo {
         ASIFStatus asif_status = ASIFStatus::OK;
         bool asif_invoked = false;   // true only when constraint_aware
         bool asif_modified = false;  // ||tau_safe - tau_des|| > eps
+        double asif_delta = 0.0;     // slack magnitude from last QP solve (0 when strict)
     };
 
     // --- Kinematic Task Controller Base Class ---

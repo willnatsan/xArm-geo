@@ -65,6 +65,7 @@ namespace xarm_geo {
     struct ValidationOptions {
         double integration_dt = 0.002;
         double collision_check_dt = 0.05;
+        double min_distance_threshold = 0.0;
     };
 
     struct ValidationResult {
@@ -149,10 +150,20 @@ namespace xarm_geo {
 
             if ((t - last_collision_t) >= options.collision_check_dt || s == num_steps) {
                 update_geometry_poses(model, data, col_model, col_data);
-                if (compute_collisions(col_model, col_data)) {
+                bool hit = false;
+                if (options.min_distance_threshold > 0.0) {
+                    const auto dr =
+                        compute_min_distance(col_model, col_data, options.min_distance_threshold);
+                    hit = (dr.min_distance < options.min_distance_threshold);
+                } else {
+                    hit = compute_collisions(col_model, col_data);
+                }
+                if (hit) {
                     result.status = ValidationStatus::COLLISION;
                     result.failure_time = t;
-                    result.reason = "collision_detected";
+                    result.reason = options.min_distance_threshold > 0.0
+                                        ? "min_distance_below_threshold"
+                                        : "collision_detected";
                     return result;
                 }
                 last_collision_t = t;
@@ -190,8 +201,9 @@ namespace xarm_geo {
 
         const double duration = trajectory.duration();
         if (!std::isfinite(duration)) {
-            return {ValidationStatus::TRAJECTORY_ERROR, -1.0,
-                    "infinite_duration_use_explicit_duration_overload"};
+            return {.status = ValidationStatus::TRAJECTORY_ERROR,
+                    .failure_time = -1.0,
+                    .reason = "infinite_duration_use_explicit_duration_overload"};
         }
 
         return validate_trajectory(model, data, col_model, col_data, trajectory, q_start,
@@ -227,10 +239,20 @@ namespace xarm_geo {
             forward_kinematics(model, data);
             update_geometry_poses(model, data, col_model, col_data);
 
-            if (compute_collisions(col_model, col_data)) {
+            bool hit = false;
+            if (options.min_distance_threshold > 0.0) {
+                const auto dr =
+                    compute_min_distance(col_model, col_data, options.min_distance_threshold);
+                hit = (dr.min_distance < options.min_distance_threshold);
+            } else {
+                hit = compute_collisions(col_model, col_data);
+            }
+            if (hit) {
                 result.status = ValidationStatus::COLLISION;
                 result.failure_time = t;
-                result.reason = "collision_detected";
+                result.reason = options.min_distance_threshold > 0.0
+                                    ? "min_distance_below_threshold"
+                                    : "collision_detected";
                 return result;
             }
         }
@@ -247,8 +269,9 @@ namespace xarm_geo {
 
         const double duration = trajectory.duration();
         if (!std::isfinite(duration)) {
-            return {ValidationStatus::TRAJECTORY_ERROR, -1.0,
-                    "infinite_duration_use_explicit_duration_overload"};
+            return {.status = ValidationStatus::TRAJECTORY_ERROR,
+                    .failure_time = -1.0,
+                    .reason = "infinite_duration_use_explicit_duration_overload"};
         }
 
         return validate_trajectory(model, data, col_model, col_data, trajectory, duration, options);

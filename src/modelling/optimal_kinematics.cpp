@@ -10,16 +10,12 @@
 #include <xarm_geo/safety/tasks.h>
 
 namespace {
-    // Default activation distance for collision pairs.  Per-pair overrides can
-    // be supplied via OptimalIKOptions::per_pair_activation_distance; see
-    // CollisionBarrier::per_pair_activation_distance in safety/barriers.h.
     constexpr double CollisionActivationDistance = 0.05;  // metres
-
-    // Increased from 5.0 to 15.0: tighter class-K closing-rate constraint so
-    // the velocity is reduced to near-zero well before the surface is reached.
-    constexpr double CollisionBarrierAlpha = 15.0;
-
+    constexpr double CollisionBarrierAlpha = 5.0;
     constexpr double CollisionBarrierMargin = 0.0;
+
+    // Threshold above which the slack variable is considered active.
+    constexpr double kSlackActiveThreshold = 1e-6;
 }  // namespace
 
 namespace xarm_geo {
@@ -46,9 +42,9 @@ namespace xarm_geo {
         // Accumulate one task into (H, g):
         //   H += J^T * W^T W * J + lm_damping * I
         //   g -= J^T * W^T W * (alpha * e)
-        void accumulate_task(const Task &task, const Model &model, Data &data, Eigen::MatrixXd &H,
-                             Eigen::VectorXd &g, Eigen::MatrixXd &J_scratch,
-                             Eigen::VectorXd &e_scratch) {
+        void accumulate_task(const Task &task, const Model &model, Data &data,
+                             Eigen::Ref<Eigen::MatrixXd> H, Eigen::Ref<Eigen::VectorXd> g,
+                             Eigen::MatrixXd &J_scratch, Eigen::VectorXd &e_scratch) {
 
             const int rows = task.rows();
             const int dof = model.dof;
@@ -90,23 +86,33 @@ namespace xarm_geo {
         const int dof = model.dof;
         auto &ws = data.optik;
 
-        // Cost matrices.
-        ws.H.setZero(dof, dof);
-        ws.g.setZero(dof);
+        // When relax_cost is finite we augment the decision variable with a
+        // non-negative scalar slack delta that softens all barrier rows.
+        // n_dec = dof + 1 (with slack) or dof (strict / no barriers).
+        int n_barrier = 0;
+        for (const KinematicBarrier *b : barriers) {
+            if (b != nullptr) { n_barrier += b->rows(); }
+        }
+        const bool use_slack = std::isfinite(opts.relax_cost) && (n_barrier > 0);
+        const int n_dec = dof + (use_slack ? 1 : 0);
+
+        // --- Cost matrices ---
+        ws.H.setZero(n_dec, n_dec);
+        ws.g.setZero(n_dec);
 
         for (const Task *task : tasks) {
             if (task == nullptr) { continue; }
-            accumulate_task(*task, model, data, ws.H, ws.g, ws.J_task, ws.e_task);
+            accumulate_task(*task, model, data, ws.H.topLeftCorner(dof, dof), ws.g.head(dof),
+                            ws.J_task, ws.e_task);
         }
 
-        // Tikhonov regularisation for strict PD.
-        ws.H.diagonal().array() += opts.regularisation;
+        // Tikhonov regularisation on the joint-velocity block only.
+        ws.H.topLeftCorner(dof, dof).diagonal().array() += opts.regularisation;
 
-        // Refresh collision pre-requisites; barriers without collision needs ignore col_data.
-        // Derive the AABB-cull threshold from the installed barriers: use the maximum
-        // activation distance reported by any barrier.  This ensures that pairs needing
-        // a larger per-pair activation window (e.g. an external obstacle) are not culled
-        // before the barrier's compute() has a chance to evaluate them.
+        // Slack cost: relax_cost * delta^2, occupying the bottom-right corner.
+        if (use_slack) { ws.H(dof, dof) = opts.relax_cost; }
+
+        // Refresh collision geometry for any barrier that needs it.
         if (col_model != nullptr && col_data != nullptr && !barriers.empty()) {
             update_geometry_poses(model, data, *col_model, *col_data);
             double cull_threshold = CollisionActivationDistance;
@@ -118,54 +124,62 @@ namespace xarm_geo {
             (void)compute_min_distance(*col_model, *col_data, cull_threshold);
         }
 
-        // Inequality rows.
-        int n_in = 0;
+        // --- Inequality rows ---
+        // Hard constraints (two-sided):   l_c <= G_c * dq <= u_c
+        // Barrier rows (one-sided):       G_b * dq - delta <= b_b  (slack column = -1)
+        // Slack bound (box):              0 <= delta < inf
+        int n_constraint = 0;
         for (const Constraint *c : constraints) {
-            if (c != nullptr) { n_in += c->rows(); }
+            if (c != nullptr) { n_constraint += c->rows(); }
         }
-        for (const KinematicBarrier *b : barriers) {
-            if (b != nullptr) { n_in += b->rows(); }
-        }
+        const int n_slack_box = use_slack ? 1 : 0;
+        const int n_in = n_constraint + n_barrier + n_slack_box;
 
-        // Assemble (A, l, u).
         if (n_in > 0) {
-            if (ws.A.rows() != n_in || ws.A.cols() != dof) {
-                ws.A.resize(n_in, dof);
+            if (ws.A.rows() != n_in || ws.A.cols() != n_dec) {
+                ws.A.resize(n_in, n_dec);
                 ws.l.resize(n_in);
                 ws.u.resize(n_in);
             }
             ws.A.setZero();
 
-            // Constraints (hard, two-sided): l_c <= G_c * dq <= u_c.
             int row = 0;
+
+            // Hard constraints — joint block only; slack column stays zero.
             for (const Constraint *c : constraints) {
                 if (c == nullptr) { continue; }
                 const int r = c->rows();
-                c->compute(model, data, ws.A.middleRows(row, r), ws.l.segment(row, r),
+                c->compute(model, data, ws.A.block(row, 0, r, dof), ws.l.segment(row, r),
                            ws.u.segment(row, r));
                 row += r;
             }
 
-            // Barriers (one-sided): G_b * dq <= b_b  (l = -inf, u = b_b).
+            // Barrier rows — G_b in joint block, -1 in slack column.
             for (const KinematicBarrier *b : barriers) {
                 if (b == nullptr) { continue; }
                 const int r = b->rows();
-                b->compute(model, data, col_model, col_data, ws.A.middleRows(row, r),
+                b->compute(model, data, col_model, col_data, ws.A.block(row, 0, r, dof),
                            ws.u.segment(row, r));
                 ws.l.segment(row, r).setConstant(-std::numeric_limits<double>::infinity());
+                if (use_slack) { ws.A.block(row, dof, r, 1).setConstant(-1.0); }
                 row += r;
             }
+
+            // delta >= 0  expressed as  0 <= delta <= +inf.
+            if (use_slack) {
+                ws.A(row, dof) = 1.0;
+                ws.l(row) = 0.0;
+                ws.u(row) = std::numeric_limits<double>::infinity();
+            }
         } else {
-            ws.A.resize(0, dof);
+            ws.A.resize(0, n_dec);
             ws.l.resize(0);
             ws.u.resize(0);
         }
 
-        // First call -> init(); subsequent calls -> update() (reuses factorisation).
-        ensure_qp(ws, dof, /*m_eq=*/0, /*m_in=*/n_in);
+        ensure_qp(ws, n_dec, /*m_eq=*/0, /*m_in=*/n_in);
 
-        // Empty equality-constraint placeholders.
-        Eigen::MatrixXd A_eq(0, dof);
+        Eigen::MatrixXd A_eq(0, n_dec);
         Eigen::VectorXd b_eq(0);
 
         if (n_in > 0) {
@@ -176,7 +190,7 @@ namespace xarm_geo {
                 ws.qp->update(ws.H, ws.g, A_eq, b_eq, ws.A, ws.l, ws.u);
             }
         } else {
-            Eigen::MatrixXd A_in(0, dof);
+            Eigen::MatrixXd A_in(0, n_dec);
             Eigen::VectorXd l_in(0), u_in(0);
             if (!ws.initialised) {
                 ws.qp->init(ws.H, ws.g, A_eq, b_eq, A_in, l_in, u_in);
@@ -187,11 +201,8 @@ namespace xarm_geo {
         }
 
         ws.qp->settings.max_iter = opts.max_iters_qp;
-        // Use WARM_START_WITH_PREVIOUS_RESULT only after at least one successful
-        // solve, so the LDLT factorisation is already populated. On the very
-        // first solve of a newly-constructed QP the proxsuite 0.7.2 PrimalLDLT
-        // backend skips setup_factorization (leaving ldl.dim()==0), which then
-        // triggers an assertion inside active_set_change -> rank_r_update.
+        // Guard: only warm-start after at least one successful solve so the
+        // LDLT factorisation is populated (proxsuite 0.7.2 assertion otherwise).
         ws.qp->settings.initial_guess =
             (opts.warmstart && ws.solved_once)
                 ? proxsuite::proxqp::InitialGuessStatus::WARM_START_WITH_PREVIOUS_RESULT
@@ -199,18 +210,21 @@ namespace xarm_geo {
 
         ws.qp->solve();
 
-        const auto status = ws.qp->results.info.status;
-        if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
+        const auto qp_status = ws.qp->results.info.status;
+        if (qp_status == proxsuite::proxqp::QPSolverOutput::PROXQP_SOLVED) {
             ws.solved_once = true;
-            // QP solution is dq over a step of opts.dt; convert back to rad/s.
-            data.v_out = (opts.dt > 0.0) ? (ws.qp->results.x / opts.dt) : ws.qp->results.x;
-            return OptimalIKStatus::OK;
+            // Extract joint-velocity block; convert dq -> rad/s.
+            const Eigen::VectorXd &x = ws.qp->results.x;
+            const double inv_dt = (opts.dt > 0.0) ? (1.0 / opts.dt) : 1.0;
+            data.v_out = x.head(dof) * inv_dt;
+            const double delta = use_slack ? x[dof] : 0.0;
+            return (delta > kSlackActiveThreshold) ? OptimalIKStatus::RELAXED : OptimalIKStatus::OK;
         }
-        if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_PRIMAL_INFEASIBLE ||
-            status == proxsuite::proxqp::QPSolverOutput::PROXQP_DUAL_INFEASIBLE) {
+        if (qp_status == proxsuite::proxqp::QPSolverOutput::PROXQP_PRIMAL_INFEASIBLE ||
+            qp_status == proxsuite::proxqp::QPSolverOutput::PROXQP_DUAL_INFEASIBLE) {
             return OptimalIKStatus::INFEASIBLE;
         }
-        if (status == proxsuite::proxqp::QPSolverOutput::PROXQP_MAX_ITER_REACHED) {
+        if (qp_status == proxsuite::proxqp::QPSolverOutput::PROXQP_MAX_ITER_REACHED) {
             return OptimalIKStatus::MAX_ITERS;
         }
         return OptimalIKStatus::ERROR;

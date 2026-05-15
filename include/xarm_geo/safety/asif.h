@@ -28,28 +28,36 @@ namespace xarm_geo {
     // controller bases (controller.cpp) so the defaults stay in one place.
 
     namespace asif_defaults {
-        // Increased from 25 to 75: stronger position-feedback term in the HOCBF
-        // so the arm decelerates more aggressively before reaching the obstacle.
-        inline constexpr double kBarrierAlpha0 = 75.0;
-
-        // Increased from 10 to 20: stronger velocity-feedback term in the HOCBF
-        // second-derivative condition, compensating for the dropped J̇_h·v term.
-        inline constexpr double kBarrierAlpha1 = 20.0;
-
-        // Default activation distance for collision pairs.  Per-pair overrides
-        // can be supplied via ASIFOptions::per_pair_activation_distance; see
-        // DynCollisionBarrier::per_pair_activation_distance in safety/barriers.h.
+        inline constexpr double kBarrierAlpha0 = 25.0;
+        inline constexpr double kBarrierAlpha1 = 10.0;
         inline constexpr double kCollisionActivationDistance = 0.05;
     }  // namespace asif_defaults
 
     // --- ASIF Status & Options ---
 
-    enum class ASIFStatus : std::uint8_t { OK, INFEASIBLE, MAX_ITERS, ERROR };
+    // OK       : strict solution, slack delta ≈ 0
+    // RELAXED  : QP solved but slack delta > 1e-6; barrier(s) softened slightly
+    // INFEASIBLE / MAX_ITERS / ERROR : true solver failure (rare once relaxation is on)
+    enum class ASIFStatus : std::uint8_t { OK, RELAXED, INFEASIBLE, MAX_ITERS, ERROR };
 
     struct ASIFOptions {
         double regularisation = 1e-12;  // Tikhonov diagonal regulariser
-        int max_iters_qp = 50;          // ProxQP inner iterations
+        int max_iters_qp = 20;          // ProxQP inner iterations
         bool warmstart = true;          // reuse previous QP solution
+
+        // Slack-variable relaxation cost for CBF barrier rows.
+        double relax_cost = 1e6;
+
+        // Task-consistent QP cost weights (6-vector: [w_pos x3, w_rot x3]).
+        // When size() == 6, replaces the joint-space cost with an operational-space
+        // form that penalises task-space acceleration deviation:
+        //
+        //     H = (J * M^-1)^T * diag(W_task) * (J * M^-1) + reg * I
+        //     g = -H * tau_des
+        //
+        // DynamicTaskControllerBase sets this automatically (w_pos=1, w_rot=0.1).
+        // DynamicJointControllerBase leaves it empty (joint-space cost preserved).
+        Eigen::VectorXd W_task;
 
         // Hard torque box. Empty -> no torque bounds. The convenience overload
         // auto-populates these from model.limits[i].tau_max (symmetric).
@@ -57,6 +65,7 @@ namespace xarm_geo {
         Eigen::VectorXd tau_max;
 
         // Per-joint cost weights (diagonal). Empty -> unit weights.
+        // Ignored when W_task is populated (task-consistent cost takes precedence).
         Eigen::VectorXd weight;
 
         // Per-pair activation distance override for the DynCollisionBarrier.
@@ -70,6 +79,20 @@ namespace xarm_geo {
     };
 
     // --- Composable ASIF Filter ---
+    //
+    // Projects a nominal torque tau_des to the closest tau_safe that keeps the
+    // closed-loop trajectory in the safe set defined by the supplied barriers:
+    //
+    //   min_{tau, delta}  0.5 (tau - tau_des)^T H (tau - tau_des) + relax_cost * delta^2
+    //   s.t.              A_cbf tau - delta <= b_cbf   (one block per DynamicBarrier)
+    //                     tau_min <= tau <= tau_max
+    //                     delta >= 0
+    //
+    // H is either diag(W) + reg*I (joint-space, default) or the task-consistent
+    // form (J*M^-1)^T diag(W_task) (J*M^-1) + reg*I when opts.W_task.size()==6.
+    //
+    // The slack variable delta makes the problem always feasible; status is
+    // RELAXED when delta > 1e-6.  Solved with ProxQP.
     //
     // Pre-conditions: compute_jacobians, compute_mass_matrix, and
     // compute_bias_forces have already been called for the current data.q;
@@ -91,6 +114,8 @@ namespace xarm_geo {
     // runs compute_mass_matrix, compute_bias_forces, update_geometry_poses,
     // and compute_min_distance; the caller must still have run
     // compute_jacobians beforehand.
+    //
+    // Passes opts.W_task and opts.relax_cost through to the composable filter.
 
     auto asif_filter(const Model &model, Data &data, const CollisionModel &col_model,
                      CollisionData &col_data, const Eigen::Ref<const Eigen::VectorXd> &v,

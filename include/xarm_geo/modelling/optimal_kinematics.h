@@ -13,34 +13,26 @@ namespace xarm_geo {
 
     // --- Optimal IK Status & Options ---
 
-    enum class OptimalIKStatus : std::uint8_t { OK, INFEASIBLE, MAX_ITERS, ERROR };
+    // OK       : strict solution, slack delta ≈ 0
+    // RELAXED  : QP solved but slack delta > 1e-6; barrier(s) softened slightly
+    // INFEASIBLE / MAX_ITERS / ERROR : true solver failure (rare once relaxation is on)
+    enum class OptimalIKStatus : std::uint8_t { OK, RELAXED, INFEASIBLE, MAX_ITERS, ERROR };
 
     struct OptimalIKOptions {
         double regularisation = 1e-12;  // Tikhonov Regularisation on H
-        double dt = 0.002;              // QP / runtime control timestep (s). Sets the physical
-                                        // meaning of v_out (rad/s) and the velocity-limit window
-                                        // for the differential-IK overloads. Should equal the
-                                        // controller step period.
-        double ik_step_dt = 0.1;        // Position-level IK iteration step (s). Used only by
-                                        // optimal_inverse_kinematics to size the per-iteration
-                                        // Newton step. Decoupled from `dt` so the offline IK can
-                                        // take sensible large steps (≈ 18 deg/joint/iter at the
-                                        // default) without being capped by the real-time velocity
-                                        // limit that applies during closed-loop control.
-        int max_iters_qp = 50;          // ProxQP Inner Iterations
+        double dt = 0.002;              // QP / runtime control timestep (s)
+        double ik_step_dt = 0.1;        // Position-level IK iteration step (s)
+        int max_iters_qp = 20;          // ProxQP Inner Iterations
         bool warmstart = true;          // Reuse Previous QP Solution
         double tolerance = 1e-4;        // Convergence Threshold (Position-Level IK)
         int max_iters = 50;             // Maximum Iterations (Position-Level IK)
         int max_restarts = 10;          // Maximum Restart Attempts (Position-Level IK)
 
+        // The QP minimises relax_cost * delta^2 subject to delta >= 0, making all
+        // barrier constraints softly relaxable.
+        double relax_cost = 1e6;
+
         // Per-pair activation distance override for the collision barrier.
-        // Used by the convenience overloads (optimal_inverse_diff_kinematics,
-        // optimal_inverse_kinematics) that build the default CollisionBarrier
-        // internally.  When size() == col_model.collision_pairs.size(), entry
-        // k overrides the library default for pair k; otherwise the scalar
-        // library default (5 cm) is used for all pairs.  The AABB-cull
-        // threshold passed to compute_min_distance() is automatically set to
-        // the maximum value across all entries.  Empty by default (no override).
         Eigen::VectorXd per_pair_activation_distance;
     };
 
@@ -48,9 +40,15 @@ namespace xarm_geo {
     //
     // Solves a single QP step:
     //
-    //     min_dq   sum_t  0.5 * ||J_t dq + alpha_t e_t||^2_W_t  +  reg * ||dq||^2
+    //     min_{dq, delta}  sum_t  0.5 * ||J_t dq + alpha_t e_t||^2_W_t
+    //                           + reg * ||dq||^2
+    //                           + relax_cost * delta^2
     //     s.t.     l_c <= G_c dq <= u_c           (hard constraints)
-    //              G_b dq <= b_b                  (CBF inequalities)
+    //              G_b dq - delta <= b_b           (CBF inequalities, softened)
+    //              delta >= 0
+    //
+    // The slack variable delta makes the problem always feasible when
+    // opts.relax_cost < inf.  Status is RELAXED when delta > 1e-6.
     //
     // Writes the resulting joint velocity into data.v_out (units: rad/s, the
     // QP's decision variable dq is divided by opts.dt before being written).

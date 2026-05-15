@@ -51,7 +51,6 @@
 #include <iostream>
 #include <memory>
 #include <numbers>
-#include <optional>
 #include <string>
 #include <thread>
 
@@ -89,7 +88,9 @@ namespace {
     constexpr double kLineHalfExtent = 0.20;  // metres
 
     // Obstacle sphere radius.
-    constexpr double kObstacleRadius = 0.05;  // metres
+    constexpr double kObstacleRadius = 0.07;  // metres
+
+    constexpr double kObstacleZOffset = 0.01;  // metres
 
     // Trajectory duration.
     constexpr double kTrajDuration = 8.0;  // seconds
@@ -106,22 +107,11 @@ namespace {
     constexpr double kKpRotKin = 8.0;
 
     // Torque-mode translational gains (same as validate_torque.cpp / exp_2).
-    constexpr double kKpPos = 4000.0;
+    constexpr double kKpPos = 2000.0;
     constexpr double kKdLin = 280.0;
 
-    // Rotational gains are raised 3× (kp_rot) and ~1.7× (kd_ang) relative to
-    // the baseline values from validate_torque.cpp.  The higher kp_rot makes
-    // orientation tracking 3× more expensive for the ASIF QP to trade away
-    // against the obstacle CBF, reducing the "wrist-twist" artefact observed
-    // when the safety filter deflects around the obstacle.  kd_ang is scaled by
-    // sqrt(3) to maintain approximate critical damping.
-    //
-    //   Baseline: kp_rot = 60,  kd_ang = 2.4   (omega_n_rot ≈ 49 rad/s @ kp=60)
-    //   3B trial: kp_rot = 180, kd_ang = 4.2   (omega_n_rot ≈ 85 rad/s; still
-    //             below 125 Hz Nyquist = 392 rad/s; may see slight damped ringing
-    //             but remains well within the stable envelope in simulation.)
-    constexpr double kKpRot = 180.0;
-    constexpr double kKdAng = 4.2;
+    constexpr double kKpRot = 60.0;
+    constexpr double kKdAng = 2.4;
 
     // -------------------------------------------------------------------------
     // build_obstacle_collision_model()
@@ -153,25 +143,28 @@ namespace {
     // make_obstacle_activation_distances()
     // -------------------------------------------------------------------------
     // Returns a per-pair activation-distance vector for the supplied collision
-    // model.  Pairs that involve the "obstacle_3b" geometry get a 0.10 m
-    // activation zone (enough lead time for the safety filter to deflect around
-    // the sphere); all other (self-collision) pairs keep the library default
-    // of 0.05 m so they are not over-activated.
+    // model.  Self-collision pairs use 0.03 m (small, since robot links at
+    // nominal poses are well-separated).  Obstacle pairs use 0.05 m — larger
+    // than self-pairs to give the safety filter time to deflect, but smaller
+    // than the original 0.10 m so the demanded detour is bounded and the arm
+    // is not over-penalised when the sphere is not directly in the path.
+    //
+    // NOTE: the obstacle-pair value must be chosen so the sphere is NOT inside
+    // the activation zone at the arm's home configuration; otherwise the start-
+    // pose IK sees too many tight constraints and ProxQP's linesearch degenerates.
 
     [[nodiscard]] auto make_obstacle_activation_distances(const CollisionModel &col)
         -> Eigen::VectorXd {
 
         const int n = static_cast<int>(col.collision_pairs.size());
         Eigen::VectorXd act(n);
-        act.setConstant(0.05);  // library default for self-collision pairs
+        act.setConstant(0.01);
 
         for (int k = 0; k < n; ++k) {
             const auto &pair = col.collision_pairs[k];
             const std::string &n1 = col.geometries[pair.obj1_idx].name;
             const std::string &n2 = col.geometries[pair.obj2_idx].name;
-            if (n1 == "obstacle_3b" || n2 == "obstacle_3b") {
-                act[k] = 0.10;  // 10 cm activation for obstacle pairs
-            }
+            if (n1 == "obstacle_3b" || n2 == "obstacle_3b") { act[k] = 0.05; }
         }
         return act;
     }
@@ -236,15 +229,19 @@ namespace {
         scratch.use_feedforward = true;
         scratch.constraint_aware = false;
 
+        // Use the obstacle-pair activation distance as threshold: catches near-contact
+        // before actual mesh overlap, consistent with the runtime safety filter.
+        ValidationOptions val_opts;
+        val_opts.min_distance_threshold = 0.05;
         const auto val =
-            validate_trajectory(model, data, col_model, col_data, traj, q_start, scratch);
+            validate_trajectory(model, data, col_model, col_data, traj, q_start, scratch, val_opts);
         if (val.status == ValidationStatus::OK) {
             std::cout << "  [" << variant_tag
-                      << "] Pre-flight (unconstrained): trajectory is "
-                         "COLLISION-FREE (unexpected -- obstacle may not be in path).\n";
+                      << "] Pre-flight (unconstrained): no near-contact detected "
+                         "(unexpected -- obstacle may not be in path).\n";
         } else {
             std::cout << "  [" << variant_tag
-                      << "] Pre-flight (unconstrained): COLLISION DETECTED at t="
+                      << "] Pre-flight (unconstrained): near-contact/collision at t="
                       << val.failure_time << " s  (" << val.reason << ") -- as expected.\n";
         }
     }
@@ -255,7 +252,8 @@ namespace {
 
     auto run_variant_A(Simulation &sim, const Model &model, Data &data, CollisionModel &col_model,
                        CollisionData &col_data, const trajectories::ObstacleLine &traj,
-                       const Eigen::VectorXd &q_home, bool log_data) -> bool {
+                       const Eigen::Vector3d &obstacle_pos, const Eigen::VectorXd &q_home,
+                       bool log_data) -> bool {
 
         // Per-pair activation: obstacle pairs at 10 cm, self-collision at 5 cm.
         const Eigen::VectorXd pair_activation = make_obstacle_activation_distances(col_model);
@@ -320,14 +318,6 @@ namespace {
         TaskTarget task_target;
 
         std::cout << "  [Phase 2] GeometricPController + OptIK (obstacle avoidance)...\n";
-        // On QP failure the controller does not write vel; reuse the last
-        // successfully-issued command instead of zeroing, which avoids the
-        // discontinuous deceleration that causes catch-up oscillation after
-        // the obstacle is passed.
-        JointVelocity vel_last_good(model.dof);
-        vel_last_good.v.setZero();
-        bool have_last_good_a = false;
-        bool first_failure_a = true;
         while (t < kTrajDuration && sim.is_running()) {
             const auto step_start = std::chrono::steady_clock::now();
             if (sim.read(state) != InterfaceStatus::OK) { break; }
@@ -339,26 +329,10 @@ namespace {
                 const ControllerStatus cs = ctrl.update(model, data, ctx, vel);
                 perf.record(t0, std::chrono::steady_clock::now());
 
-                if (cs == ControllerStatus::INFEASIBLE || cs == ControllerStatus::MAX_ITERS) {
-                    if (first_failure_a) {
-                        std::cerr << "  [3B-A] Safety filter "
-                                  << (cs == ControllerStatus::INFEASIBLE ? "INFEASIBLE"
-                                                                         : "MAX_ITERS")
-                                  << " at t=" << t << " s  (holding last good command)\n";
-                        first_failure_a = false;
-                    }
-                    // Reuse the last good command to avoid discontinuous deceleration.
-                    if (have_last_good_a) {
-                        vel = vel_last_good;
-                    } else {
-                        vel.v.setZero();  // fallback if no good command yet
-                    }
-                } else if (cs != ControllerStatus::OK) {
-                    std::cerr << "[3B-A] Controller error at t=" << t << "\n";
+                if (cs != ControllerStatus::OK) {
+                    std::cerr << "[3B-A] Controller error at t=" << t
+                              << " (status=" << static_cast<int>(cs) << ")\n";
                     break;
-                } else {
-                    vel_last_good = vel;
-                    have_last_good_a = true;
                 }
                 if (sim.write(vel) != InterfaceStatus::OK) { break; }
 
@@ -379,7 +353,7 @@ namespace {
                 sim.set_marker(task_target.pose);
                 sim.update_scene();
                 // Draw the obstacle sphere so it is visible in the MuJoCo viewer.
-                sim.draw_sphere(traj.midpoint(), kObstacleRadius, kObstacleRGBA);
+                sim.draw_sphere(obstacle_pos, kObstacleRadius / 2, kObstacleRGBA);
                 sim.render();
                 last_render_t = t;
             }
@@ -405,7 +379,8 @@ namespace {
 
     auto run_variant_B(Simulation &sim, const Model &model, Data &data, CollisionModel &col_model,
                        CollisionData &col_data, const trajectories::ObstacleLine &traj,
-                       const Eigen::VectorXd &q_home, bool log_data) -> bool {
+                       const Eigen::Vector3d &obstacle_pos, const Eigen::VectorXd &q_home,
+                       bool log_data) -> bool {
 
         const Eigen::VectorXd pair_activation = make_obstacle_activation_distances(col_model);
 
@@ -474,14 +449,6 @@ namespace {
         TaskTarget task_target;
 
         std::cout << "  [Phase 2] GeometricPDController + ASIF (obstacle avoidance)...\n";
-        // On ASIF failure the controller does not write tau; reuse the last
-        // successfully-certified torque command.  This avoids the gravity-comp
-        // hold, which was causing the arm to freeze and accumulate tracking
-        // error, leading to oscillatory INFEASIBLE / MAX_ITERS sequences.
-        JointTorque tau_last_good(model.dof);
-        tau_last_good.tau.setZero();
-        bool have_last_good_b = false;
-        bool first_failure_b = true;
         while (t < kTrajDuration && sim.is_running()) {
             const auto step_start = std::chrono::steady_clock::now();
             if (sim.read(state) != InterfaceStatus::OK) { break; }
@@ -493,28 +460,10 @@ namespace {
                 const ControllerStatus cs = ctrl.update(model, data, ctx, tau);
                 perf.record(t0, std::chrono::steady_clock::now());
 
-                if (cs == ControllerStatus::INFEASIBLE || cs == ControllerStatus::MAX_ITERS) {
-                    if (first_failure_b) {
-                        std::cerr << "  [3B-B] Safety filter "
-                                  << (cs == ControllerStatus::INFEASIBLE ? "INFEASIBLE"
-                                                                         : "MAX_ITERS")
-                                  << " at t=" << t << " s  (holding last good torque command)\n";
-                        first_failure_b = false;
-                    }
-                    // Reuse the last ASIF-certified torque to avoid discontinuous motion.
-                    if (have_last_good_b) {
-                        tau = tau_last_good;
-                    } else {
-                        // No good command yet: gravity compensation as absolute fallback.
-                        compute_gravity_forces(model, data);
-                        tau.tau = data.g;
-                    }
-                } else if (cs != ControllerStatus::OK) {
-                    std::cerr << "[3B-B] Controller error at t=" << t << "\n";
+                if (cs != ControllerStatus::OK) {
+                    std::cerr << "[3B-B] Controller error at t=" << t
+                              << " (status=" << static_cast<int>(cs) << ")\n";
                     break;
-                } else {
-                    tau_last_good = tau;
-                    have_last_good_b = true;
                 }
                 if (sim.write(tau) != InterfaceStatus::OK) { break; }
 
@@ -534,8 +483,7 @@ namespace {
             if (t - last_render_t >= render_dt) {
                 sim.set_marker(task_target.pose);
                 sim.update_scene();
-                // Draw the obstacle sphere so it is visible in the MuJoCo viewer.
-                sim.draw_sphere(traj.midpoint(), kObstacleRadius, kObstacleRGBA);
+                sim.draw_sphere(obstacle_pos, kObstacleRadius / 2, kObstacleRGBA);
                 sim.render();
                 last_render_t = t;
             }
@@ -564,7 +512,8 @@ namespace {
 
     auto run_variant_C(Hardware &hw, const Model &model, Data &data, CollisionModel &col_model,
                        CollisionData &col_data, const trajectories::ObstacleLine &traj,
-                       const Eigen::VectorXd &q_home, bool log_data) -> bool {
+                       const Eigen::Vector3d &obstacle_pos, const Eigen::VectorXd &q_home,
+                       bool log_data) -> bool {
 
         const Eigen::VectorXd pair_activation = make_obstacle_activation_distances(col_model);
 
@@ -598,101 +547,19 @@ namespace {
         trajectories::JointPTP a_traj(q_home, q_start, kPhaseDuration);
         if (!run_joint_ptp_hw(hw, model, data, joint_ctrl, a_traj, state, vel)) { return false; }
 
-        // --- Hardware-specific tuning ---
-        //
-        // On hardware, sensor noise and SDK command latency make the safety
-        // filter more prone to oscillation if gains and QP settings match the
-        // simulation values exactly.  The following mitigations are applied:
-        //
-        //   1. Lower P gains (8 -> 5): reduces the error-driven command
-        //      magnitude that the QP has to certify on each tick.
-        //
-        //   2. Higher QP regularisation (1e-12 -> 1e-6): adds Tikhonov damping
-        //      to the QP Hessian, biasing solutions toward smaller joint
-        //      velocities when constraints are tight.  Reduces twitchy outputs
-        //      near the activation boundary.
-        //
-        //   3. Halved CBF alpha (15 -> 7.5) for the obstacle pair only: the
-        //      standard library α multiplies position noise into velocity-command
-        //      noise.  Halving it on hardware keeps deflection authority while
-        //      halving the jitter coupling.  Implemented via the composable OptIK
-        //      API so we can set per-barrier options independently.
-        //
-        //   4. Per-tick velocity rate-limiter: consecutive commands cannot differ
-        //      by more than kHwSlewMaxRadS2 * dt per joint, which prevents the
-        //      QP from issuing abrupt reversals that the hardware servo loop
-        //      cannot track.
-        //
-        // The controller is set constraint_aware = false and we run the QP
-        // ourselves each tick via the composable API, so we have full control
-        // over barrier parameters.
-
-        constexpr double kHwKpPos = 5.0;         // (sim uses kKpPosKin = 8.0)
-        constexpr double kHwKpRot = 5.0;         // (sim uses kKpRotKin = 8.0)
-        constexpr double kHwCBFAlpha = 7.5;      // (sim uses CollisionBarrierAlpha = 15.0)
-        constexpr double kHwRegul = 1e-6;        // (sim default = 1e-12)
-        constexpr double kHwSlewMaxRadS2 = 5.0;  // max allowed Δv per joint per second
-
-        // Controller computes cmd_twist only (no built-in OptIK);
-        // we route through the composable solver below.
         controllers::GeometricPController ctrl(model);
-        ctrl.gains.kp_pos.setConstant(kHwKpPos);
-        ctrl.gains.kp_rot.setConstant(kHwKpRot);
+        ctrl.gains.kp_pos.setConstant(kKpPosKin);
+        ctrl.gains.kp_rot.setConstant(kKpRotKin);
         ctrl.use_feedforward = true;
-        ctrl.constraint_aware = false;  // composable path manages constraints
-
-        // Pre-flight validation: run with constraint_aware = true temporarily
-        // to check the trajectory is collision-free under the safety filter.
-        {
-            controllers::GeometricPController ctrl_val(model);
-            ctrl_val.gains.kp_pos.setConstant(kHwKpPos);
-            ctrl_val.gains.kp_rot.setConstant(kHwKpRot);
-            ctrl_val.use_feedforward = true;
-            ctrl_val.constraint_aware = true;
-            ctrl_val.attach_collision(col_model, col_data);
-            ctrl_val.optimal_ik_options.dt = kHardwareControlPeriodS;
-            ctrl_val.optimal_ik_options.per_pair_activation_distance = pair_activation;
-
-            const auto val =
-                validate_trajectory(model, data, col_model, col_data, traj, q_start, ctrl_val);
-            if (val.status != ValidationStatus::OK) {
-                std::cerr << "[3B-C] Safety validation failed: " << val.reason
-                          << " at t=" << val.failure_time << "\n"
-                          << "  Aborting hardware run.\n";
-                return false;
-            }
-            std::cout << "  [3B-C] Pre-flight (constrained): PASSED.\n";
-        }
+        ctrl.constraint_aware = true;
+        ctrl.attach_collision(col_model, col_data);
+        ctrl.optimal_ik_options.dt = kHardwareControlPeriodS;
+        ctrl.optimal_ik_options.per_pair_activation_distance = pair_activation;
 
         const std::string trial_name = diagnostics::make_trial_name(
             "hardware", controllers::GeometricPController::kName, trajectories::ObstacleLine::kName,
-            /*constraint=*/true, ctrl.use_feedforward);
+            ctrl.constraint_aware, ctrl.use_feedforward);
         auto logger = make_logger("3b", model, trial_name, log_data);
-
-        // Composable OptIK options for the Phase 2 runtime loop.
-        OptimalIKOptions hw_ik_opts;
-        hw_ik_opts.dt = kHardwareControlPeriodS;
-        hw_ik_opts.regularisation = kHwRegul;
-        hw_ik_opts.warmstart = false;  // hardware noise makes warm-start unreliable
-        hw_ik_opts.per_pair_activation_distance = pair_activation;
-        // max_iters_qp already bumped to 50 globally.
-
-        // Pre-build composable objects (reused every tick).
-        TwistTask twist_task;
-        twist_task.dt = kHardwareControlPeriodS;
-
-        VelocityLimit vlim(model, kHardwareControlPeriodS);
-        PositionLimit plim(model);
-
-        CollisionBarrier cbar(model, col_model, 0.05);  // scalar default for self-pairs
-        cbar.alpha = kHwCBFAlpha;                       // halved vs. simulation
-        cbar.margin = 0.0;
-        cbar.dt = kHardwareControlPeriodS;
-        cbar.per_pair_activation_distance = pair_activation;  // obstacle pairs -> 10 cm
-
-        const Task *task_ptrs[1] = {&twist_task};
-        const Constraint *constraint_ptrs[2] = {&vlim, &plim};
-        const KinematicBarrier *barrier_ptrs[1] = {&cbar};
 
         const double dt = kHardwareControlPeriodS;
         const auto dt_ns =
@@ -700,82 +567,19 @@ namespace {
         auto next_tick = std::chrono::steady_clock::now();
         std::int64_t tick = 0;
         TaskTarget task_target;
-        const double slew_max_per_tick = kHwSlewMaxRadS2 * dt;  // max Δv per joint per tick
 
-        std::cout << "  [Phase 2] GeometricPController + OptIK (hw, obstacle avoidance)...\n"
-                  << "  hw_kp=" << kHwKpPos << " cbf_alpha=" << kHwCBFAlpha << " regul=" << kHwRegul
-                  << " slew=" << kHwSlewMaxRadS2 << " rad/s²\n";
-
-        JointVelocity vel_last_good_c(model.dof);
-        vel_last_good_c.v.setZero();
-        bool have_last_good_c = false;
-        bool first_failure_c = true;
+        std::cout << "  [Phase 2] GeometricPController + OptIK (hw, obstacle avoidance)...\n";
         for (double t = 0.0; t < kTrajDuration && hw.is_running(); t += dt, ++tick) {
             if (hw.read(state) != InterfaceStatus::OK) { return false; }
             if (traj.evaluate(t, task_target) != TrajectoryStatus::OK) { break; }
 
-            // Compute the unconstrained body-frame command twist via the hook.
             const TaskControllerContext ctx{state, task_target, dt_ns};
-            manifold::SE3::Twist cmd_twist;
-            {
-                // We call update() on ctrl (constraint_aware = false) purely to get
-                // the DLS-IDK velocity output into vel, then re-solve via the
-                // composable API for the hardware-tuned QP.
-                ctrl.update(model, data, ctx, vel);
-                // Retrieve the pre-QP DLS twist from the velocity triplet diagnostics.
-                // At this point data.v_out holds the DLS result.
-                // We reconstruct cmd_twist from v_out via the Jacobian.
-                cmd_twist = data.body_jacobian * data.v_out;
-            }
+            const ControllerStatus cs = ctrl.update(model, data, ctx, vel);
 
-            // Refresh collision geometry before the composable QP.
-            const double cull_thresh = cbar.max_activation_distance();
-            update_geometry_poses(model, data, col_model, col_data);
-            compute_min_distance(col_model, col_data, cull_thresh);
-
-            // Run the composable OptIK QP with hardware-tuned settings.
-            twist_task.target_twist = cmd_twist;
-            std::span<const Task *const> hw_tasks(task_ptrs, 1);
-            std::span<const Constraint *const> hw_constraints(constraint_ptrs, 2);
-            std::span<const KinematicBarrier *const> hw_barriers(barrier_ptrs, 1);
-            const OptimalIKStatus status =
-                optimal_inverse_diff_kinematics(model, data, &col_model, &col_data, hw_tasks,
-                                                hw_constraints, hw_barriers, hw_ik_opts);
-
-            const ControllerStatus cs = to_controller_status(status);
-
-            if (cs == ControllerStatus::INFEASIBLE || cs == ControllerStatus::MAX_ITERS) {
-                if (first_failure_c) {
-                    std::cerr << "  [3B-C] Safety filter "
-                              << (cs == ControllerStatus::INFEASIBLE ? "INFEASIBLE" : "MAX_ITERS")
-                              << " at t=" << t << " s  (holding last good command)\n";
-                    first_failure_c = false;
-                }
-                // Reuse last good command to avoid discontinuous deceleration.
-                if (have_last_good_c) {
-                    vel = vel_last_good_c;
-                } else {
-                    vel.v.setZero();
-                }
-            } else if (cs != ControllerStatus::OK) {
-                std::cerr << "[3B-C] Controller error.\n";
+            if (cs != ControllerStatus::OK) {
+                std::cerr << "[3B-C] Controller error at t=" << t
+                          << " (status=" << static_cast<int>(cs) << ")\n";
                 return false;
-            } else {
-                // QP succeeded: v_out holds the certified joint velocity.
-                vel.v = data.v_out;
-
-                // Apply per-tick slew-rate limit: clamp |Δv_i| <= slew_max_per_tick.
-                if (have_last_good_c) {
-                    for (int i = 0; i < model.dof; ++i) {
-                        const double delta = vel.v[i] - vel_last_good_c.v[i];
-                        if (std::abs(delta) > slew_max_per_tick) {
-                            vel.v[i] =
-                                vel_last_good_c.v[i] + std::copysign(slew_max_per_tick, delta);
-                        }
-                    }
-                }
-                vel_last_good_c = vel;
-                have_last_good_c = true;
             }
             if (hw.write(vel) != InterfaceStatus::OK) { return false; }
 
@@ -783,17 +587,7 @@ namespace {
                 diagnostics::LogSample s;
                 diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
                 s.controller_status = static_cast<std::uint8_t>(cs);
-                // Composable path: fill velocity triplet manually.
-                // v_ctrl/v_des = DLS pre-QP result (stored in data.v_out before the
-                // composable QP ran and overwrote it).  Since we can't recover the
-                // pre-QP value post-hoc, we use the current vel as v_safe and leave
-                // v_ctrl/v_des identical (both equal to the final command).
-                s.v_ctrl = vel.v;
-                s.v_des = vel.v;
-                s.v_safe = vel.v;
-                s.optik_invoked = true;
-                s.optik_status = static_cast<std::uint8_t>(status);
-                s.optik_modified = (cs == ControllerStatus::OK);
+                diagnostics::fill_velocity_diagnostics(s, ctrl);
                 logger->log(s);
             }
 
@@ -882,7 +676,11 @@ auto main(int argc, char *argv[]) -> int {
 
     const manifold::SE3 anchor = make_anchor_pose(q_home);
     const trajectories::ObstacleLine line_traj = make_line_trajectory(anchor);
-    const Eigen::Vector3d obstacle_pos = line_traj.midpoint();
+
+    // Offset the obstacle below the line midpoint so the trajectory grazes the
+    // sphere rather than passing through its centre.  See kObstacleZOffset.
+    Eigen::Vector3d obstacle_pos = line_traj.midpoint();
+    obstacle_pos.z() -= kObstacleZOffset;
 
     // Build collision model with the static sphere obstacle.
     CollisionModel col_model = build_obstacle_collision_model(model, obstacle_pos);
@@ -890,7 +688,7 @@ auto main(int argc, char *argv[]) -> int {
 
     std::cout << "=== Experiment 3B: Obstacle-Passing Line Trajectory ===\n"
               << "Obstacle: sphere r=" << kObstacleRadius << " m at [" << obstacle_pos.transpose()
-              << "]\n"
+              << "] (" << kObstacleZOffset << " m below trajectory line)\n"
               << "Line: start=[" << line_traj.start_pose().r3().transpose() << "] -> end=["
               << line_traj.end_pose().r3().transpose() << "]\n"
               << "Variants: " << variants_str << "\n"
@@ -911,8 +709,8 @@ auto main(int argc, char *argv[]) -> int {
 
         if (variants_str.find('A') != std::string::npos) {
             std::cout << "--- Variant A: GeometricPController + OptIK (sim) ---\n";
-            if (!run_variant_A(sim, model, data, col_model, col_data, line_traj, q_home,
-                               log_data)) {
+            if (!run_variant_A(sim, model, data, col_model, col_data, line_traj, obstacle_pos,
+                               q_home, log_data)) {
                 std::cerr << "[3B] Variant A failed.\n";
                 return 1;
             }
@@ -922,8 +720,8 @@ auto main(int argc, char *argv[]) -> int {
 
         if (variants_str.find('B') != std::string::npos) {
             std::cout << "--- Variant B: GeometricPDController + ASIF (sim) ---\n";
-            if (!run_variant_B(sim, model, data, col_model, col_data, line_traj, q_home,
-                               log_data)) {
+            if (!run_variant_B(sim, model, data, col_model, col_data, line_traj, obstacle_pos,
+                               q_home, log_data)) {
                 std::cerr << "[3B] Variant B failed.\n";
                 return 1;
             }
@@ -937,9 +735,9 @@ auto main(int argc, char *argv[]) -> int {
 #ifdef XARM_GEO_HAS_REAL_XARM
     if (want_hw) {
         std::cout << "--- Variant C: GeometricPController + OptIK (hardware) ---\n"
-                  << "  NOTE: Ensure a physical sphere obstacle of radius " << kObstacleRadius
-                  << " m is placed at [" << obstacle_pos.transpose()
-                  << "] in the robot workspace.\n";
+                  << "  NOTE: Place a physical sphere (r=" << kObstacleRadius << " m) at ["
+                  << obstacle_pos.transpose() << "] -- " << kObstacleZOffset
+                  << " m below the trajectory line.\n";
 
         Hardware hw(model.dof, robot_ip);
         if (!hw.is_running()) {
@@ -952,7 +750,8 @@ auto main(int argc, char *argv[]) -> int {
         data.q = state.q;
         compute_jacobians(model, data);
 
-        if (!run_variant_C(hw, model, data, col_model, col_data, line_traj, q_home, log_data)) {
+        if (!run_variant_C(hw, model, data, col_model, col_data, line_traj, obstacle_pos, q_home,
+                           log_data)) {
             std::cerr << "[3B] Variant C failed.\n";
             hw.shutdown();
             return 1;

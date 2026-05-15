@@ -27,11 +27,21 @@ namespace xarm_geo {
                                         // take sensible large steps (≈ 18 deg/joint/iter at the
                                         // default) without being capped by the real-time velocity
                                         // limit that applies during closed-loop control.
-        int max_iters_qp = 20;          // ProxQP Inner Iterations
+        int max_iters_qp = 50;          // ProxQP Inner Iterations
         bool warmstart = true;          // Reuse Previous QP Solution
         double tolerance = 1e-4;        // Convergence Threshold (Position-Level IK)
         int max_iters = 50;             // Maximum Iterations (Position-Level IK)
         int max_restarts = 10;          // Maximum Restart Attempts (Position-Level IK)
+
+        // Per-pair activation distance override for the collision barrier.
+        // Used by the convenience overloads (optimal_inverse_diff_kinematics,
+        // optimal_inverse_kinematics) that build the default CollisionBarrier
+        // internally.  When size() == col_model.collision_pairs.size(), entry
+        // k overrides the library default for pair k; otherwise the scalar
+        // library default (5 cm) is used for all pairs.  The AABB-cull
+        // threshold passed to compute_min_distance() is automatically set to
+        // the maximum value across all entries.  Empty by default (no override).
+        Eigen::VectorXd per_pair_activation_distance;
     };
 
     // --- Composable API: One Velocity-Level QP Step ---

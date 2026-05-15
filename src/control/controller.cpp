@@ -42,7 +42,12 @@ namespace xarm_geo {
             return ControllerStatus::HOOK_FAILED;
         }
 
-        // DLS-IDK by default; optimal (safety-aware) IDK when constraint_aware.
+        // DLS-IDK always runs first; result is the unconstrained (pre-QP) command.
+        // When constraint_aware, the DLS output is saved as v_des before the OptIK
+        // QP may reshape it, giving a meaningful v_des vs v_safe comparison.
+        inverse_diff_kinematics(model, data, cmd_twist, ik_options);
+        const Eigen::VectorXd v_des_scratch = data.v_out;  // pre-QP DLS solution
+
         if (constraint_aware) {
             if (col_model_ == nullptr || col_data_ == nullptr) {
                 debug::log("constraint_aware=true but no collision attached; NOT_CONFIGURED");
@@ -54,21 +59,28 @@ namespace xarm_geo {
 
             if (status != OptimalIKStatus::OK) {
                 debug::log("optimal_inverse_diff_kinematics failed");
+                // Failure-path diagnostics: record the attempted pre-QP command in
+                // v_des, zero v_safe (no certified command was produced), and report
+                // the actual failure status so logged rows are not stale/misleading.
+                diag_.v_ctrl = v_des_scratch;
+                diag_.v_des = v_des_scratch;
+                diag_.v_safe = Eigen::VectorXd::Zero(model.dof);
+                diag_.optik_invoked = true;
+                diag_.optik_status = status;
+                diag_.optik_modified = false;
                 return to_controller_status(status);
             }
-        } else {
-            inverse_diff_kinematics(model, data, cmd_twist, ik_options);
         }
 
-        out.v = data.v_out;
+        out.v = data.v_out;  // post-QP (or unchanged DLS when !constraint_aware)
 
         // Populate per-tick diagnostics.
         //
-        // v_ctrl / v_des are set to the DLS-IDK result (data.v_out before OptIK
-        // may reshape it); when constraint_aware the OptIK output is the same
-        // data.v_out, so v_safe == v_ctrl when OptIK did not change the command.
-        diag_.v_ctrl = data.v_out;
-        diag_.v_des = data.v_out;
+        // v_ctrl / v_des == pre-QP DLS solution; v_safe == post-QP (or equal to
+        // v_des when constraint_aware is false and no QP ran).  optik_modified is
+        // now meaningful: non-zero iff the QP actually changed the command.
+        diag_.v_ctrl = v_des_scratch;
+        diag_.v_des = v_des_scratch;
         diag_.v_safe = data.v_out;
         diag_.optik_invoked = constraint_aware;
         diag_.optik_status = OptimalIKStatus::OK;
@@ -146,11 +158,6 @@ namespace xarm_geo {
             (void)dyn.M();
             (void)dyn.h();
 
-            // Collision pre-requisites for DynCollisionBarrier.
-            update_geometry_poses(model, data, *col_model_, *col_data_);
-            (void)compute_min_distance(*col_model_, *col_data_,
-                                       asif_defaults::kCollisionActivationDistance);
-
             // Default barrier trio (same gains as the convenience overload).
             DynPositionBarrier pbar(model);
             pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
@@ -163,6 +170,14 @@ namespace xarm_geo {
                                      asif_defaults::kCollisionActivationDistance);
             cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
             cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
+            // Forward per-pair override from asif_options; ignored when empty.
+            cbar.per_pair_activation_distance = asif_options.per_pair_activation_distance;
+
+            // Collision pre-requisites for DynCollisionBarrier.  Use cbar's
+            // max_activation_distance() as the AABB-cull threshold so per-pair
+            // overrides (e.g. external obstacles at larger activation) are not culled.
+            update_geometry_poses(model, data, *col_model_, *col_data_);
+            (void)compute_min_distance(*col_model_, *col_data_, cbar.max_activation_distance());
 
             const DynamicBarrier *bar_ptrs[3] = {&pbar, &vbar, &cbar};
 
@@ -183,12 +198,21 @@ namespace xarm_geo {
 
             if (asif_status != ASIFStatus::OK) {
                 debug::log("asif_filter failed");
+                // Failure-path diagnostics: record tau_ctrl and tau_des (what was
+                // attempted), zero tau_safe (no certified command was produced), and
+                // report the actual ASIF status so logged rows are not stale/misleading.
+                diag_.tau_ctrl = tau_ctrl_;
+                diag_.tau_des = tau_des_;
+                diag_.tau_safe = Eigen::VectorXd::Zero(model.dof);
+                diag_.asif_invoked = true;
+                diag_.asif_status = asif_status;
+                diag_.asif_modified = false;
                 return to_controller_status(asif_status);
             }
 
             out.tau = tau_safe_;
 
-            // Populate per-tick diagnostics (ASIF active).
+            // Populate per-tick diagnostics (ASIF active, success).
             diag_.tau_ctrl = tau_ctrl_;
             diag_.tau_des = tau_des_;
             diag_.tau_safe = tau_safe_;
@@ -331,11 +355,6 @@ namespace xarm_geo {
             (void)dyn.M();
             (void)dyn.h();
 
-            // Collision pre-requisites for DynCollisionBarrier.
-            update_geometry_poses(model, data, *col_model_, *col_data_);
-            (void)compute_min_distance(*col_model_, *col_data_,
-                                       asif_defaults::kCollisionActivationDistance);
-
             // Default barrier trio (same gains as the convenience overload).
             DynPositionBarrier pbar(model);
             pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
@@ -348,6 +367,14 @@ namespace xarm_geo {
                                      asif_defaults::kCollisionActivationDistance);
             cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
             cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
+            // Forward per-pair override from asif_options; ignored when empty.
+            cbar.per_pair_activation_distance = asif_options.per_pair_activation_distance;
+
+            // Collision pre-requisites for DynCollisionBarrier.  Use cbar's
+            // max_activation_distance() as the AABB-cull threshold so per-pair
+            // overrides (e.g. external obstacles at larger activation) are not culled.
+            update_geometry_poses(model, data, *col_model_, *col_data_);
+            (void)compute_min_distance(*col_model_, *col_data_, cbar.max_activation_distance());
 
             const DynamicBarrier *bar_ptrs[3] = {&pbar, &vbar, &cbar};
 
@@ -368,12 +395,21 @@ namespace xarm_geo {
 
             if (asif_status != ASIFStatus::OK) {
                 debug::log("asif_filter failed");
+                // Failure-path diagnostics: record tau_ctrl and tau_des, zero
+                // tau_safe (no certified command was produced), and report the
+                // actual ASIF status so logged rows are not stale/misleading.
+                diag_.tau_ctrl = tau_ctrl_.tau;
+                diag_.tau_des = tau_des_;
+                diag_.tau_safe = Eigen::VectorXd::Zero(model.dof);
+                diag_.asif_invoked = true;
+                diag_.asif_status = asif_status;
+                diag_.asif_modified = false;
                 return to_controller_status(asif_status);
             }
 
             out.tau = tau_safe_;
 
-            // Populate per-tick diagnostics (ASIF active).
+            // Populate per-tick diagnostics (ASIF active, success).
             diag_.tau_ctrl = tau_ctrl_.tau;
             diag_.tau_des = tau_des_;
             diag_.tau_safe = tau_safe_;

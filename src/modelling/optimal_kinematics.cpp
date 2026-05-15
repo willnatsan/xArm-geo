@@ -10,8 +10,15 @@
 #include <xarm_geo/safety/tasks.h>
 
 namespace {
+    // Default activation distance for collision pairs.  Per-pair overrides can
+    // be supplied via OptimalIKOptions::per_pair_activation_distance; see
+    // CollisionBarrier::per_pair_activation_distance in safety/barriers.h.
     constexpr double CollisionActivationDistance = 0.05;  // metres
-    constexpr double CollisionBarrierAlpha = 5.0;
+
+    // Increased from 5.0 to 15.0: tighter class-K closing-rate constraint so
+    // the velocity is reduced to near-zero well before the surface is reached.
+    constexpr double CollisionBarrierAlpha = 15.0;
+
     constexpr double CollisionBarrierMargin = 0.0;
 }  // namespace
 
@@ -96,12 +103,19 @@ namespace xarm_geo {
         ws.H.diagonal().array() += opts.regularisation;
 
         // Refresh collision pre-requisites; barriers without collision needs ignore col_data.
-        // Pass CollisionActivationDistance so pairs beyond the safety zone are skipped
-        // by the AABB early-out in compute_min_distance, avoiding expensive coal::distance
-        // calls for geometries that are trivially far apart.
+        // Derive the AABB-cull threshold from the installed barriers: use the maximum
+        // activation distance reported by any barrier.  This ensures that pairs needing
+        // a larger per-pair activation window (e.g. an external obstacle) are not culled
+        // before the barrier's compute() has a chance to evaluate them.
         if (col_model != nullptr && col_data != nullptr && !barriers.empty()) {
             update_geometry_poses(model, data, *col_model, *col_data);
-            (void)compute_min_distance(*col_model, *col_data, CollisionActivationDistance);
+            double cull_threshold = CollisionActivationDistance;
+            for (const KinematicBarrier *b : barriers) {
+                if (b != nullptr) {
+                    cull_threshold = std::max(cull_threshold, b->max_activation_distance());
+                }
+            }
+            (void)compute_min_distance(*col_model, *col_data, cull_threshold);
         }
 
         // Inequality rows.
@@ -227,6 +241,8 @@ namespace xarm_geo {
         cbar.alpha = CollisionBarrierAlpha;
         cbar.margin = CollisionBarrierMargin;
         cbar.dt = step_dt;
+        // Forward per-pair override; ignored when empty (fallback to scalar default).
+        cbar.per_pair_activation_distance = opts.per_pair_activation_distance;
 
         const Task *task_ptrs[1] = {&task};
         const Constraint *constraint_ptrs[2] = {&vlim, &plim};
@@ -276,6 +292,8 @@ namespace xarm_geo {
         cbar.alpha = CollisionBarrierAlpha;
         cbar.margin = CollisionBarrierMargin;
         cbar.dt = step_dt;
+        // Forward per-pair override; ignored when empty (fallback to scalar default).
+        cbar.per_pair_activation_distance = opts.per_pair_activation_distance;
 
         const Task *task_ptrs[1] = {&task};
         const Constraint *constraint_ptrs[2] = {&vlim, &plim};

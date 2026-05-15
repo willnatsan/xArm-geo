@@ -28,8 +28,17 @@ namespace xarm_geo {
     // controller bases (controller.cpp) so the defaults stay in one place.
 
     namespace asif_defaults {
-        inline constexpr double kBarrierAlpha0 = 25.0;
-        inline constexpr double kBarrierAlpha1 = 10.0;
+        // Increased from 25 to 75: stronger position-feedback term in the HOCBF
+        // so the arm decelerates more aggressively before reaching the obstacle.
+        inline constexpr double kBarrierAlpha0 = 75.0;
+
+        // Increased from 10 to 20: stronger velocity-feedback term in the HOCBF
+        // second-derivative condition, compensating for the dropped J̇_h·v term.
+        inline constexpr double kBarrierAlpha1 = 20.0;
+
+        // Default activation distance for collision pairs.  Per-pair overrides
+        // can be supplied via ASIFOptions::per_pair_activation_distance; see
+        // DynCollisionBarrier::per_pair_activation_distance in safety/barriers.h.
         inline constexpr double kCollisionActivationDistance = 0.05;
     }  // namespace asif_defaults
 
@@ -39,7 +48,7 @@ namespace xarm_geo {
 
     struct ASIFOptions {
         double regularisation = 1e-12;  // Tikhonov diagonal regulariser
-        int max_iters_qp = 20;          // ProxQP inner iterations
+        int max_iters_qp = 50;          // ProxQP inner iterations
         bool warmstart = true;          // reuse previous QP solution
 
         // Hard torque box. Empty -> no torque bounds. The convenience overload
@@ -49,6 +58,15 @@ namespace xarm_geo {
 
         // Per-joint cost weights (diagonal). Empty -> unit weights.
         Eigen::VectorXd weight;
+
+        // Per-pair activation distance override for the DynCollisionBarrier.
+        // Used by the convenience overload of asif_filter that builds the
+        // default DynCollisionBarrier internally.  When size() ==
+        // col_model.collision_pairs.size(), entry k overrides the library
+        // default for pair k.  The AABB-cull threshold passed to
+        // compute_min_distance() is automatically set to the maximum value.
+        // Empty by default (no override; all pairs use the 5 cm default).
+        Eigen::VectorXd per_pair_activation_distance;
     };
 
     // --- Composable ASIF Filter ---

@@ -182,6 +182,12 @@ add_dependencies(${PROJECT_NAME} ${GENERATOR_TARGET_NAME})
 if(BUILD_WITH_MUJOCO)
     add_executable(simulation tests/simulation_test.cpp)
     target_link_libraries(simulation PRIVATE ${PROJECT_NAME})
+
+    add_executable(validate_torque tests/validate_torque.cpp)
+    target_link_libraries(validate_torque PRIVATE ${PROJECT_NAME})
+
+    add_executable(validate_integral tests/validate_integral.cpp)
+    target_link_libraries(validate_integral PRIVATE ${PROJECT_NAME})
 endif()
 
 if (BUILD_WITH_REAL_XARM)
@@ -191,3 +197,30 @@ endif()
 
 add_executable(examples_compilation tests/examples_compile_test.cpp)
 target_link_libraries(examples_compilation PRIVATE ${PROJECT_NAME})
+
+# --- Comparative Study Experiments ---
+#
+# Experiments 1A, 1B, 2, 3A (sim variants), 3B (sim variants) require MuJoCo.
+# Experiments 3A (hw variants) and 3B (hw variant) additionally require the
+# real xArm SDK; their hardware code paths are #ifdef XARM_GEO_HAS_REAL_XARM
+# gated inside the source so they compile cleanly with BUILD_WITH_REAL_XARM=OFF.
+# All five binaries include tests/experiments/common.h via the tests/ include dir.
+
+if(BUILD_WITH_MUJOCO)
+    add_executable(exp_1a_step_response     tests/experiments/exp_1a_step_response.cpp)
+    add_executable(exp_1b_smooth_trajectory tests/experiments/exp_1b_smooth_trajectory.cpp)
+    add_executable(exp_2_disturbance        tests/experiments/exp_2_disturbance.cpp)
+    add_executable(exp_3a_sim_hw            tests/experiments/exp_3a_sim_hw.cpp)
+    add_executable(exp_3b_obstacle          tests/experiments/exp_3b_obstacle.cpp)
+
+    foreach(exp_tgt
+            exp_1a_step_response
+            exp_1b_smooth_trajectory
+            exp_2_disturbance
+            exp_3a_sim_hw
+            exp_3b_obstacle)
+        target_link_libraries(${exp_tgt} PRIVATE ${PROJECT_NAME})
+        # Expose tests/ so that #include "experiments/common.h" resolves.
+        target_include_directories(${exp_tgt} PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+    endforeach()
+endif()

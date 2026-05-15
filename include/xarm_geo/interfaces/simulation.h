@@ -117,6 +117,12 @@ namespace xarm_geo {
         void draw_arrow(const Eigen::Vector3d &point_origin, const Eigen::Vector3d &point_end,
                         double width, const float rgba[4]);
 
+        // Draws a transient sphere into the current MuJoCo scene.
+        // Must be called after update_scene() and before render() so the geom
+        // is not cleared before it is rasterised.  The geom is discarded after
+        // render() returns (per-frame, not persistent).
+        void draw_sphere(const Eigen::Vector3d &center, double radius, const float rgba[4]);
+
     private:
         Config config_;
         int dof_;

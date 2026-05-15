@@ -368,6 +368,21 @@ namespace xarm_geo {
         mjv_connector(geom, mjGEOM_ARROW, width, point_origin.data(), point_end.data());
     }
 
+    void Simulation::draw_sphere(const Eigen::Vector3d &center, double radius,
+                                 const float rgba[4]) {
+        if (this->scene_.ngeom >= this->scene_.maxgeom) return;
+
+        mjvGeom *geom = this->scene_.geoms + this->scene_.ngeom;
+        this->scene_.ngeom++;
+
+        const mjtNum size[3] = {radius, radius, radius};
+        const mjtNum pos[3] = {center.x(), center.y(), center.z()};
+        // Identity orientation matrix (row-major).
+        const mjtNum mat[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+
+        mjv_initGeom(geom, mjGEOM_SPHERE, size, pos, mat, rgba);
+    }
+
     // --- GLFW Mouse Callbacks ---
 
     void Simulation::mouse_button_callback(GLFWwindow *window, int button, int act, int mods) {

@@ -67,14 +67,21 @@ namespace xarm_geo {
         auto &J_p1 = data.collision.point_jacobian_1;
         auto &J_p2 = data.collision.point_jacobian_2;
 
+        const bool use_override =
+            (per_pair_activation_distance.size() == static_cast<Eigen::Index>(num_pairs));
+
         for (int k = 0; k < num_pairs; ++k) {
             const auto &dist_result = col_data->distance_results[k];
             const double d_k = dist_result.min_distance;
 
+            // Per-pair activation distance: use override entry when available,
+            // otherwise fall back to the scalar activation_distance field.
+            const double a_k = use_override ? per_pair_activation_distance[k] : activation_distance;
+
             // Pair is outside the activation zone (or was culled by the AABB
             // early-out in compute_min_distance and assigned d_k = +inf).
             // Write a trivially-satisfied row and skip the Jacobian computation.
-            if (d_k >= activation_distance) {
+            if (d_k >= a_k) {
                 G.row(k).setZero();
                 b(k) = std::numeric_limits<double>::infinity();
                 continue;
@@ -96,7 +103,7 @@ namespace xarm_geo {
 
             G.row(k) = (-(n.transpose() * (J_p2 - J_p1))) * inv_dt;
 
-            const double h_k = d_k - activation_distance;
+            const double h_k = d_k - a_k;
             b(k) = alpha * (h_k - margin);
         }
     }
@@ -210,14 +217,19 @@ namespace xarm_geo {
         auto &J_p1 = data.collision.point_jacobian_1;
         auto &J_p2 = data.collision.point_jacobian_2;
 
+        const bool use_override =
+            (per_pair_activation_distance.size() == static_cast<Eigen::Index>(num_pairs));
+
         for (int k = 0; k < num_pairs; ++k) {
             const auto &dist_result = col_data->distance_results[k];
             const double d_k = dist_result.min_distance;
 
+            const double a_k = use_override ? per_pair_activation_distance[k] : activation_distance;
+
             // Pair is outside the activation zone (or was culled by the AABB
             // early-out in compute_min_distance and assigned d_k = +inf).
             // Write a trivially-satisfied row and skip the Jacobian computation.
-            if (d_k >= activation_distance) {
+            if (d_k >= a_k) {
                 A.row(k).setZero();
                 b(k) = std::numeric_limits<double>::infinity();
                 continue;
@@ -243,7 +255,7 @@ namespace xarm_geo {
             // alpha_0 / alpha_1 must be tuned conservatively to absorb its effect.
             A.row(k) = -(J_h * M_inv);
 
-            const double h_k = d_k - activation_distance;
+            const double h_k = d_k - a_k;
             b(k) = alpha_0 * (h_k - margin) + alpha_1 * (J_h * v).value() - (J_h * M_inv_h).value();
         }
     }
@@ -258,10 +270,14 @@ namespace xarm_geo {
         if (col_data == nullptr) { return std::numeric_limits<double>::infinity(); }
 
         // Assumes the caller has refreshed col_data at the candidate q.
+        // Use per-pair activation when available; otherwise use scalar default.
+        const bool use_override =
+            (per_pair_activation_distance.size() == static_cast<Eigen::Index>(num_pairs));
         double h_min = std::numeric_limits<double>::infinity();
         for (int k = 0; k < num_pairs; ++k) {
             const double d_k = col_data->distance_results[k].min_distance;
-            h_min = std::min(h_min, d_k - activation_distance - margin);
+            const double a_k = use_override ? per_pair_activation_distance[k] : activation_distance;
+            h_min = std::min(h_min, d_k - a_k - margin);
         }
         return h_min;
     }

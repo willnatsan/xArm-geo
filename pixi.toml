@@ -98,6 +98,29 @@ analyse = { cmd = "python -m xarm_geo_analysis.cli" }
 report  = { cmd = "python -m xarm_geo_analysis.cli report" }
 test-analysis = { cmd = "python -m pytest python/xarm_geo_analysis/tests/ -v -p no:launch_testing -p no:launch_ros" }
 
+# --- Comparative Study Experiments ---
+# Run all variants of a single experiment (sim only; hardware needs --hw flag).
+exp-1a     = { cmd = "./build/exp_1a_step_response --log true",     depends-on = ["build_release"] }
+exp-1b     = { cmd = "./build/exp_1b_smooth_trajectory --log true", depends-on = ["build_release"] }
+exp-2      = { cmd = "./build/exp_2_disturbance --log true",        depends-on = ["build_release"] }
+exp-3a-sim = { cmd = "./build/exp_3a_sim_hw --log true",            depends-on = ["build_release"] }
+exp-3b-sim = { cmd = "./build/exp_3b_obstacle --log true",          depends-on = ["build_release"] }
+
+# Hardware variants — pass the robot IP as the first argument, e.g.:
+#   pixi run exp-3a-hw 192.168.1.221
+exp-3a-hw = { cmd = "./build/exp_3a_sim_hw --hw {{ ip }} --log true", args = [{ arg = "ip" }], depends-on = ["build_release"] }
+exp-3b-hw = { cmd = "./build/exp_3b_obstacle --hw {{ ip }} --log true", args = [{ arg = "ip" }], depends-on = ["build_release"] }
+
+# Per-experiment analysis shortcuts.
+# Usage:  pixi run report-exp 1a
+#         pixi run report-exp 2
+report-exp = { cmd = "python -m xarm_geo_analysis.cli report tests/results/exp_{{ id }}/", args = [{ arg = "id" }] }
+
+# Usage:  pixi run plot-exp 1a --save-dir paper/figures/exp_1a/
+# Note: overlay compare requires listing individual CSVs; use the bash helper
+# below for convenience, or call 'pixi run analyse plot compare <csvs>...' directly.
+plot-exp = { cmd = "bash -c 'python -m xarm_geo_analysis.cli plot compare tests/results/exp_{{ id }}/*.csv --save-dir paper/figures/exp_{{ id }}/'", args = [{ arg = "id" }] }
+
 # --- Separate Environment for Code Quality ---
 [feature.lint.dependencies]
 pre-commit = ">=4.5.1,<5"

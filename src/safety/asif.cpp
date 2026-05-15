@@ -184,11 +184,6 @@ namespace xarm_geo {
         compute_mass_matrix(model, data);
         compute_bias_forces(model, data, v);
 
-        // Collision pre-requisites for DynCollisionBarrier.
-        update_geometry_poses(model, data, col_model, col_data);
-        (void)compute_min_distance(col_model, col_data,
-                                   asif_defaults::kCollisionActivationDistance);
-
         DynPositionBarrier pbar(model);
         pbar.alpha_0 = asif_defaults::kBarrierAlpha0;
         pbar.alpha_1 = asif_defaults::kBarrierAlpha1;
@@ -199,6 +194,14 @@ namespace xarm_geo {
         DynCollisionBarrier cbar(model, col_model, asif_defaults::kCollisionActivationDistance);
         cbar.alpha_0 = asif_defaults::kBarrierAlpha0;
         cbar.alpha_1 = asif_defaults::kBarrierAlpha1;
+        // Forward per-pair override; ignored when empty (fallback to scalar default).
+        cbar.per_pair_activation_distance = opts.per_pair_activation_distance;
+
+        // Collision pre-requisites for DynCollisionBarrier.  Use cbar's reported
+        // max_activation_distance() as the AABB-cull threshold so pairs whose
+        // per-pair activation exceeds the scalar default are not prematurely culled.
+        update_geometry_poses(model, data, col_model, col_data);
+        (void)compute_min_distance(col_model, col_data, cbar.max_activation_distance());
 
         const DynamicBarrier *barrier_ptrs[3] = {&pbar, &vbar, &cbar};
         std::span<const DynamicBarrier *const> barriers(barrier_ptrs);

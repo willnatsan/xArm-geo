@@ -42,6 +42,15 @@ namespace xarm_geo {
                              const CollisionData *col_data, Eigen::Ref<Eigen::MatrixXd> G,
                              Eigen::Ref<Eigen::VectorXd> b) const = 0;
 
+        // Maximum activation distance used by this barrier.  The composable
+        // OptIK solver calls this on every installed barrier to determine the
+        // AABB-cull threshold passed to compute_min_distance(), ensuring that
+        // pairs which need a larger activation window are not prematurely culled.
+        // The default (0.0) means "no collision data required by this barrier".
+        [[nodiscard]] virtual auto max_activation_distance() const noexcept -> double {
+            return 0.0;
+        }
+
         double alpha = 1.0;   // Class-K gain
         double margin = 0.0;  // Tightens the inequality
         double dt = 1.0;      // Discretisation step size
@@ -71,11 +80,18 @@ namespace xarm_geo {
     // --- CollisionBarrier (Self / Environment Distance) ---
     //
     // For each collision pair k:
-    //     h_k(q) = d_k(q) - activation_distance
+    //     h_k(q) = d_k(q) - a_k
+    //
+    // where a_k is the per-pair activation distance: per_pair_activation_distance[k]
+    // if that vector is populated (size == num_pairs), otherwise the scalar
+    // `activation_distance` field. This allows callers to assign a larger activation
+    // zone to specific pairs (e.g. an external obstacle) while keeping the default
+    // for self-collision pairs.
     //
     // Requires update_geometry_poses + compute_min_distance to have been
     // called for the current data.q (the composable Optimal IDK solver runs
-    // these prerequisites automatically when collision data is present).
+    // these prerequisites automatically when collision data is present, using
+    // max_activation_distance() as the AABB-cull threshold).
 
     struct CollisionBarrier final : public KinematicBarrier {
         CollisionBarrier(const Model & /*model*/, const CollisionModel &col_model,
@@ -84,9 +100,24 @@ namespace xarm_geo {
               activation_distance(activation_distance_) {}
 
         const int num_pairs;
-        double activation_distance;  // d_safe (m); barrier active when d_k < this
+        double activation_distance;  // d_safe (m); default for all pairs
+
+        // Per-pair activation distance override. When size() == num_pairs,
+        // per_pair_activation_distance[k] is used for pair k; otherwise all
+        // pairs use the scalar `activation_distance`. Empty by default.
+        Eigen::VectorXd per_pair_activation_distance;
 
         [[nodiscard]] auto rows() const noexcept -> int override { return num_pairs; }
+
+        // Returns the maximum activation distance across all pairs, used by the
+        // composable solver to set the AABB-cull threshold in compute_min_distance().
+        [[nodiscard]] auto max_activation_distance() const noexcept -> double override {
+            if (per_pair_activation_distance.size() == num_pairs &&
+                per_pair_activation_distance.size() > 0) {
+                return std::max(activation_distance, per_pair_activation_distance.maxCoeff());
+            }
+            return activation_distance;
+        }
 
         void compute(const Model &model, Data &data, const CollisionModel *col_model,
                      const CollisionData *col_data, Eigen::Ref<Eigen::MatrixXd> G,
@@ -133,6 +164,13 @@ namespace xarm_geo {
                     const Eigen::Ref<const Eigen::VectorXd> & /*q*/,
                     const Eigen::Ref<const Eigen::VectorXd> & /*v*/) const -> double {
             return std::numeric_limits<double>::infinity();
+        }
+
+        // Maximum activation distance used by this barrier; see KinematicBarrier
+        // for the full rationale.  The ASIF convenience overload reads this to
+        // determine the compute_min_distance() AABB-cull threshold.
+        [[nodiscard]] virtual auto max_activation_distance() const noexcept -> double {
+            return 0.0;
         }
 
         double alpha_0 = 1.0;  // CBF gain (also used for relative-degree-1)
@@ -196,7 +234,11 @@ namespace xarm_geo {
     // --- DynCollisionBarrier (HOCBF; relative degree 2 in tau) ---
     //
     // For each collision pair k:
-    //     h_k(q) = d_k(q) - activation_distance
+    //     h_k(q) = d_k(q) - a_k
+    //
+    // where a_k is the per-pair activation distance: per_pair_activation_distance[k]
+    // if that vector is populated (size == num_pairs), otherwise the scalar
+    // `activation_distance` field. Same semantics as CollisionBarrier above.
     //
     // Drops the J_h_dot * v term in the second derivative (standard
     // manipulator-CBF approximation); alpha_0 / alpha_1 must be tuned
@@ -209,9 +251,23 @@ namespace xarm_geo {
               activation_distance(activation_distance_) {}
 
         const int num_pairs;
-        double activation_distance;
+        double activation_distance;  // default for all pairs
+
+        // Per-pair activation distance override. Same semantics as
+        // CollisionBarrier::per_pair_activation_distance. Empty by default.
+        Eigen::VectorXd per_pair_activation_distance;
 
         [[nodiscard]] auto rows() const noexcept -> int override { return num_pairs; }
+
+        // Returns max activation distance; used by asif_filter convenience
+        // overload to set the AABB-cull threshold in compute_min_distance().
+        [[nodiscard]] auto max_activation_distance() const noexcept -> double override {
+            if (per_pair_activation_distance.size() == num_pairs &&
+                per_pair_activation_distance.size() > 0) {
+                return std::max(activation_distance, per_pair_activation_distance.maxCoeff());
+            }
+            return activation_distance;
+        }
 
         void compute_torque_constraint(const Model &model, Data &data,
                                        const CollisionModel *col_model,

@@ -24,8 +24,8 @@
 // Controller gains
 // ----------------
 //   Variant A (kinematic):  kp_pos = kp_rot = 8.0
-//   Variants B/C (torque):  kp_pos = 4000, kp_rot = 60,
-//                           kd_lin = 280,  kd_ang = 2.4  (critically damped)
+//   Variants B/C (torque):  kp_pos = 2000, kp_rot = 100,
+//                           kd_lin = 280,  kd_ang = 5.0
 //   Variant C extra:        ki_lin = ki_ang = 2.0 [1/s]  (Bhat formulation)
 //
 // The simulation is reset between variants (Phase 0: home) so all three start
@@ -97,11 +97,11 @@ namespace {
     constexpr double kKpPosKin = 8.0;
     constexpr double kKpRotKin = 8.0;
 
-    // Dynamic-mode gains (critically damped; from validate_torque.cpp).
-    constexpr double kKpPos = 4000.0;
-    constexpr double kKpRot = 60.0;
+    // Dynamic-mode gains (matches exp_3a and exp_3b for consistency).
+    constexpr double kKpPos = 2000.0;
+    constexpr double kKpRot = 100.0;
     constexpr double kKdLin = 280.0;
-    constexpr double kKdAng = 2.4;
+    constexpr double kKdAng = 5.0;
 
     // Integral gains for PID variant (Bhat formulation, units [1/s]).
     // Integral time constant ~ 1/ki = 0.5 s; from validate_integral.cpp.
@@ -175,7 +175,10 @@ namespace {
             /*constraint=*/ctrl.constraint_aware,
             /*feedforward=*/ctrl.use_feedforward);
 
-        auto logger = make_logger("2", model, trial_name, log_data);
+        auto logger = make_logger("2", model, trial_name, log_data,
+                                  {{"disturbance_start_s", kDisturbanceStartS},
+                                   {"disturbance_end_s", kDisturbanceEndS},
+                                   {"disturbance_force_x_N", 10.0}});
 
         const ConstantWrench disturbance(make_wrench(10.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                                          kDisturbanceStartS, kDisturbanceEndS);
@@ -268,7 +271,10 @@ namespace {
             /*constraint=*/ctrl.constraint_aware,
             /*feedforward=*/ctrl.use_feedforward);
 
-        auto logger = make_logger("2", model, trial_name, log_data);
+        auto logger = make_logger("2", model, trial_name, log_data,
+                                  {{"disturbance_start_s", kDisturbanceStartS},
+                                   {"disturbance_end_s", kDisturbanceEndS},
+                                   {"disturbance_force_x_N", 10.0}});
 
         const ConstantWrench disturbance(make_wrench(10.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                                          kDisturbanceStartS, kDisturbanceEndS);
@@ -319,6 +325,11 @@ namespace {
                     diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
                     s.controller_status = static_cast<std::uint8_t>(cs);
                     diagnostics::fill_torque_diagnostics(s, ctrl);
+                    // Log the Bhat integrator state when the controller exposes it
+                    // (GeometricPIDController only; GeometricPDController does not).
+                    if constexpr (requires { ctrl.integrator_state(); }) {
+                        diagnostics::fill_integrator_diagnostics(s, ctrl.integrator_state());
+                    }
                     logger->log(s);
                 }
             }

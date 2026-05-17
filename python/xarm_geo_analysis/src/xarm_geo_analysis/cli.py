@@ -5,12 +5,22 @@ Sub-commands
 ------------
 plot trial   <csv>               4-panel diagnostic figure for one trial.
 plot compare <csv1> <csv2> ...   overlay plots across multiple trials.
+plot exp     <id> <dir>          Experiment-specific figure set (see below).
 report       <csv-or-dir> [-o]   print / write the scalar summary table.
 metric       <name> <csv>        print a single scalar metric (CI-friendly).
 
+Experiment-specific plot sets (``plot exp <id> <dir>``)
+--------------------------------------------------------
+  1a   3-D path overlay + geodesic error overlay + error-twist overlay
+  1b   geodesic error overlay + control-effort overlay
+  2    tracking-error-with-disturbance overlay + PID integrator state
+       (one integrator plot per CSV that has e_I data)
+  3a   error distribution box plot + per-axis position zoom (X axis)
+  3b   3-D path with obstacle + obstacle distance + intervention norms
+
 Saving plots
 ------------
-Both plot sub-commands accept optional output flags:
+All plot sub-commands accept optional output flags:
 
     --save-dir <dir>          Write plot files into <dir> instead of displaying
                               interactively.  The directory is created if absent.
@@ -22,20 +32,18 @@ Both plot sub-commands accept optional output flags:
 Plots are always saved with bbox_inches="tight" (no surrounding whitespace).
 
 PDF files can be included directly in LaTeX via:
-    \\includegraphics[width=\\linewidth]{figures/trial_tracking_errors.pdf}
+    \\includegraphics[width=\\linewidth]{figures/trial_name_tracking_errors.pdf}
 
 Examples
 --------
     # Interactive display (default)
-    xarm-geo-analyse plot trial tests/results/sim_GeometricPController_PipeInspection_ff.csv
+    xarm-geo-analyse plot trial tests/results/sim_GeometricPController_FigureEight_ff.csv
 
-    # Save LaTeX-ready PDFs
-    xarm-geo-analyse plot trial tests/results/sim_GeometricPController_PipeInspection_ff.csv \\
-        --save-dir paper/figures/phase2/
+    # Experiment-specific figure set for Exp 1A, saved as PDFs
+    xarm-geo-analyse plot exp 1a tests/results/exp_1a/ --save-dir paper/figures/exp_1a/
 
-    # Save PNGs for slides
-    xarm-geo-analyse plot compare trial1.csv trial2.csv \\
-        --save-dir slides/figures/ --format png --dpi 200
+    # Generic compare overlay for ad-hoc inspection
+    xarm-geo-analyse plot compare trial1.csv trial2.csv --save-dir slides/ --format png
 
     xarm-geo-analyse report tests/results/ -o summary.md
     xarm-geo-analyse metric trans_rmse_m tests/results/trial.csv
@@ -231,6 +239,142 @@ def cmd_metric(args: argparse.Namespace) -> None:
     print(value if math.isfinite(value) else "nan")
 
 
+def cmd_plot_exp(args: argparse.Namespace) -> None:
+    """Generate the experiment-specific figure set for a results directory."""
+    from xarm_geo_analysis.plotting import (
+        plot_3d_paths_compare,
+        plot_command_norm_overlay,
+        plot_error_boxplot,
+        plot_error_twist_overlay,
+        plot_integrator_state,
+        plot_intervention_norm,
+        plot_obstacle_distance,
+        plot_tracking_with_disturbance,
+        plot_axis_zoom,
+    )
+    from xarm_geo_analysis.plotting.compare import overlay
+    from xarm_geo_analysis.metrics.tracking import rotational_geodesic_error
+    from xarm_geo_analysis.trial import Experiment
+
+    exp_id = args.exp_id
+    results_dir = Path(args.results_dir)
+
+    if not results_dir.is_dir():
+        print(f"Directory not found: {results_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    exp = Experiment.load_dir(results_dir)
+    if len(exp) == 0:
+        print(f"No CSV files found in {results_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    import numpy as np
+
+    figures: list[tuple] = []
+
+    if exp_id == "1a":
+        # 3-D path overlay (all three variants)
+        figures.append((plot_3d_paths_compare(exp), "exp_1a_3d_paths"))
+
+        # Geodesic rotational error overlay
+        def rot_deg(trial):
+            return np.degrees(rotational_geodesic_error(trial))
+
+        figures.append(
+            (
+                overlay(
+                    exp,
+                    rot_deg,
+                    ylabel="Rotational Error (deg)",
+                    title="Exp 1A: Geodesic Rotational Error",
+                ),
+                "exp_1a_rot_error",
+            )
+        )
+        # Error-twist norm overlay
+        figures.append((plot_error_twist_overlay(exp), "exp_1a_error_twist"))
+
+    elif exp_id == "1b":
+        # Geodesic error overlay
+        def rot_deg(trial):
+            return np.degrees(rotational_geodesic_error(trial))
+
+        figures.append(
+            (
+                overlay(
+                    exp,
+                    rot_deg,
+                    ylabel="Rotational Error (deg)",
+                    title="Exp 1B: Geodesic Rotational Error",
+                ),
+                "exp_1b_rot_error",
+            )
+        )
+        # Control-effort norm overlay
+        figures.append((plot_command_norm_overlay(exp), "exp_1b_command_norm"))
+
+    elif exp_id == "2":
+        # Tracking error with disturbance markers — translational
+        figures.append(
+            (
+                plot_tracking_with_disturbance(exp, kind="translational"),
+                "exp_2_tracking_trans",
+            )
+        )
+        # Tracking error with disturbance markers — rotational
+        figures.append(
+            (
+                plot_tracking_with_disturbance(exp, kind="rotational"),
+                "exp_2_tracking_rot",
+            )
+        )
+        # PID integrator state (one plot per trial that has e_I data)
+        for trial in exp:
+            import numpy as np
+            from xarm_geo_analysis.metrics.transient import integrator_state
+
+            e = integrator_state(trial)
+            if np.any(np.isfinite(e)):
+                stem = trial.name.replace("/", "_")
+                figures.append(
+                    (plot_integrator_state(trial), f"exp_2_integrator_{stem}")
+                )
+
+    elif exp_id == "3a":
+        # Error distribution box plot
+        figures.append(
+            (plot_error_boxplot(exp, kind="translational"), "exp_3a_boxplot_trans")
+        )
+        figures.append(
+            (plot_error_boxplot(exp, kind="rotational"), "exp_3a_boxplot_rot")
+        )
+        # Per-axis zoom (X axis) for first two trials (sim kin + hw admittance)
+        for trial in list(exp)[:4]:
+            stem = trial.name.replace("/", "_")
+            figures.append((plot_axis_zoom(trial, axis="x"), f"exp_3a_axis_x_{stem}"))
+
+    elif exp_id == "3b":
+        # 3-D path with obstacle
+        figures.append((plot_3d_paths_compare(exp), "exp_3b_3d_paths"))
+        # Obstacle distance over time
+        figures.append((plot_obstacle_distance(exp), "exp_3b_obstacle_distance"))
+        # Intervention norms for each trial
+        for trial in exp:
+            stem = trial.name.replace("/", "_")
+            figures.append(
+                (plot_intervention_norm(trial), f"exp_3b_intervention_{stem}")
+            )
+
+    else:
+        print(
+            f"Unknown experiment id '{exp_id}'.  Valid ids: 1a 1b 2 3a 3b",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    _save_or_show(figures, args)
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -281,6 +425,15 @@ def build_parser() -> argparse.ArgumentParser:
     pc.add_argument("csvs", nargs="+", help="Paths to trial CSV files")
     _add_plot_output_args(pc)
 
+    pe = plot_sub.add_parser("exp", help="Experiment-specific figure set")
+    pe.add_argument(
+        "exp_id",
+        choices=["1a", "1b", "2", "3a", "3b"],
+        help="Experiment identifier",
+    )
+    pe.add_argument("results_dir", help="Directory containing the experiment CSVs")
+    _add_plot_output_args(pe)
+
     # --- report ---
     rep = sub.add_parser("report", help="Print or write scalar summary table")
     rep.add_argument("target", help="Path to a CSV file or directory of CSVs")
@@ -308,6 +461,8 @@ def main() -> None:
             cmd_plot_trial(args)
         elif args.plot_command == "compare":
             cmd_plot_compare(args)
+        elif args.plot_command == "exp":
+            cmd_plot_exp(args)
     elif args.command == "report":
         cmd_report(args)
     elif args.command == "metric":

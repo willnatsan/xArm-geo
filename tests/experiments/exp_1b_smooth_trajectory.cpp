@@ -1,7 +1,7 @@
 // --- Experiment 1B: Smooth Complex Trajectory ---
 //
 // Compares the two gradient formulations of GeometricPController on a smooth,
-// continuously-moving SE(3) trajectory (PipeInspection).  No disturbance; no
+// continuously-moving SE(3) trajectory (FigureEight).  No disturbance; no
 // safety layer.  The experiment isolates the effect of gradient choice on
 // steady-state tracking accuracy and transient behaviour.
 //
@@ -13,7 +13,8 @@
 // Both variants share identical gains (kp_pos = kp_rot = 8.0), feedforward
 // enabled, constraint_aware = false.  The sim runs in VELOCITY mode.
 //
-// Trajectory: PipeInspection (circular arc in YZ plane, 15 s).
+// Trajectory: FigureEight (Lissajous figure-eight in XY plane with sinusoidal
+// Z-variation and oscillating yaw/pitch, 15 s).
 //
 // Usage
 // -----
@@ -39,8 +40,8 @@
 #include <xarm_geo/diagnostics/logger.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
 #include <xarm_geo/examples/controllers/joint_p_controller.h>
+#include <xarm_geo/examples/trajectories/figure_eight.h>
 #include <xarm_geo/examples/trajectories/joint_ptp.h>
-#include <xarm_geo/examples/trajectories/pipe_inspection.h>
 #include <xarm_geo/interfaces/simulation.h>
 #include <xarm_geo/modelling/collision.h>
 #include <xarm_geo/modelling/kinematics.h>
@@ -65,7 +66,7 @@ namespace {
 
     auto run_variant(Simulation &sim, const Model &model, Data &data, CollisionModel &col_model,
                      CollisionData &col_data, controllers::GeometricPController &ctrl,
-                     const trajectories::PipeInspection &traj, const Eigen::VectorXd &q_home,
+                     const trajectories::FigureEight &traj, const Eigen::VectorXd &q_home,
                      bool log_data, std::string_view suffix) -> bool {
 
         // IK for trajectory start pose.
@@ -97,11 +98,11 @@ namespace {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-        // Phase 2: PipeInspection trajectory.
-        std::cout << "  [Phase 2] Executing PipeInspection trajectory...\n";
+        // Phase 2: FigureEight trajectory.
+        std::cout << "  [Phase 2] Executing FigureEight trajectory...\n";
 
         const std::string trial_name = diagnostics::make_trial_name(
-            "sim", controllers::GeometricPController::kName, trajectories::PipeInspection::kName,
+            "sim", controllers::GeometricPController::kName, trajectories::FigureEight::kName,
             /*constraint=*/ctrl.constraint_aware,
             /*feedforward=*/ctrl.use_feedforward, suffix);
 
@@ -162,7 +163,7 @@ namespace {
         }
         logger.reset();
 
-        perf.report("[Phase 2] GeometricPController PipeInspection");
+        perf.report("[Phase 2] GeometricPController FigureEight");
 
         // Phase 3: Return home.
         std::cout << "  [Phase 3] Returning home...\n";
@@ -230,9 +231,9 @@ auto main(int argc, char *argv[]) -> int {
     compute_jacobians(model, data);
 
     const manifold::SE3 anchor = make_anchor_pose(q_home);
-    const trajectories::PipeInspection traj(anchor, kTrajDuration);
+    const trajectories::FigureEight traj(anchor, kTrajDuration);
 
-    std::cout << "=== Experiment 1B: Smooth Complex Trajectory (PipeInspection) ===\n"
+    std::cout << "=== Experiment 1B: Smooth Complex Trajectory (FigureEight) ===\n"
               << "Variants: " << variants_str << "\n"
               << "Log data: " << (log_data ? "yes" : "no") << "\n\n";
 

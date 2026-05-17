@@ -8,13 +8,15 @@
 //
 // Variants
 // --------
-//   A) Simulation,  velocity mode:  GeometricPController  (OptIK off)
-//   B) Simulation,  torque mode:    GeometricPDController (ASIF off)
-//   C) Hardware,    velocity mode:  GeometricPController  (OptIK on)
+//   A) Simulation,  velocity mode:  GeometricPController  (safety off)
+//   B) Simulation,  torque mode:    GeometricPDController (safety off)
+//   C) Hardware,    velocity mode:  GeometricPController  (safety off)
 //   D) Hardware,    velocity mode + admittance:
-//                   GeometricPDController (torque) -> AdmittanceLayer -> safe_velocity_projection
+//                   GeometricPDController (torque) -> AdmittanceLayer
+//                   Safety off for all four variants so the comparison isolates
+//                   interface and admittance effects rather than safety overhead.
 //   E) Simulation,  velocity mode + admittance:
-//                   GeometricPDController (torque) -> AdmittanceLayer -> safe_velocity_projection
+//                   GeometricPDController (torque) -> AdmittanceLayer
 //                   Sim-domain analogue of Variant D; useful for offline tuning.
 //
 // Simulation variants (A, B) run by default.  E is opt-in (--variants E).
@@ -62,8 +64,6 @@
 #include <xarm_geo/modelling/kinematics.h>
 #include <xarm_geo/modelling/optimal_kinematics.h>
 #include <xarm_geo/trajectory/adapters.h>
-#include <xarm_geo/trajectory/validate.h>
-#include <xarm_geo/utils/debug.h>
 #include <xarm_geo/utils/model_builder.h>
 
 #ifdef XARM_GEO_HAS_REAL_XARM
@@ -81,12 +81,12 @@ namespace {
     constexpr double kCircleBaseDuration = 15.0;
     constexpr double kHalfSpeed = 2.0;
 
-    // Torque-mode gains (critically damped; from validate_torque.cpp).
+    // Torque-mode gains
     // Used for simulation Variant B where torque is applied directly.
-    constexpr double kKpPos = 4000.0;
-    constexpr double kKpRot = 60.0;
+    constexpr double kKpPos = 2000.0;
+    constexpr double kKpRot = 100.0;
     constexpr double kKdLin = 280.0;
-    constexpr double kKdAng = 2.4;
+    constexpr double kKdAng = 5.0;
 
     // Hardware gains for Variant D (admittance layer).
     // The stateful admittance provides its own low-pass filtering, so these can
@@ -95,10 +95,10 @@ namespace {
     // solely on the P term, so kd can be tuned independently for damping.
     // Starting point: same as simulation. Raise if steady-state error is large;
     // lower if oscillation persists after tuning the admittance cutoff.
-    constexpr double kKpPosHw = 4000.0;
-    constexpr double kKpRotHw = 60.0;
+    constexpr double kKpPosHw = 2000.0;
+    constexpr double kKpRotHw = 100.0;
     constexpr double kKdLinHw = 280.0;
-    constexpr double kKdAngHw = 2.4;
+    constexpr double kKdAngHw = 5.0;
 
     // Kinematic-mode gains.
     constexpr double kKpPosKin = 8.0;
@@ -405,15 +405,13 @@ namespace {
         if (sim.read(state) != InterfaceStatus::OK) { return false; }
         admittance.seed_from(state.v);
 
-        OptimalIKOptions proj_opts;
-        proj_opts.dt = kSimulationControlPeriodS;
-
         Eigen::VectorXd v_ff(model.dof);
-        Eigen::VectorXd v_projected(model.dof);
 
+        // Safety (safe_velocity_projection) is disabled to match Variant D and keep
+        // the four-way comparison (A/B/C/D) free of safety-layer confounds.
         const std::string trial_name = diagnostics::make_trial_name(
             "sim", controllers::GeometricPDController::kName, trajectories::TiltingCircle::kName,
-            /*constraint=*/true, ctrl.use_feedforward,
+            /*constraint=*/false, ctrl.use_feedforward,
             /*suffix=*/"admittance");
         auto logger = make_logger("3a", model, trial_name, log_data);
 
@@ -454,16 +452,8 @@ namespace {
                 }
 
                 // 3. Admittance step.
+                //    The admittance layer applies its own velocity-limit rescale internally.
                 admittance.apply(model, state.q, tau, v_ff, ctrl_dt_ns, vel);
-
-                // 4. Kinematic safety projection.
-                const OptimalIKStatus proj_status = safe_velocity_projection(
-                    model, data, col_model, col_data, vel.v, v_projected, proj_opts);
-                if (proj_status == OptimalIKStatus::OK || proj_status == OptimalIKStatus::RELAXED) {
-                    vel.v = v_projected;
-                } else {
-                    debug::log("safe_velocity_projection failed; using admittance output directly");
-                }
 
                 perf.record(t0, std::chrono::steady_clock::now());
                 if (sim.write(vel) != InterfaceStatus::OK) { break; }
@@ -473,18 +463,9 @@ namespace {
                     diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
                     s.controller_status = static_cast<std::uint8_t>(cs);
                     diagnostics::fill_torque_diagnostics(s, ctrl);
+                    // Velocity triplet from admittance: v_ctrl=v_state, v_des=v_state+v_ff,
+                    // v_safe=post-rescale (admittance's own velocity-limit rescale).
                     diagnostics::fill_admittance_diagnostics(s, admittance);
-                    if (proj_status == OptimalIKStatus::OK ||
-                        proj_status == OptimalIKStatus::RELAXED) {
-                        s.v_safe = v_projected;
-                    }
-                    s.optik_invoked = true;
-                    s.optik_modified =
-                        (proj_status == OptimalIKStatus::OK ||
-                         proj_status == OptimalIKStatus::RELAXED) &&
-                        (v_projected - admittance.last_tick_diagnostics().v_safe).norm() >
-                            optik_defaults::kModifiedTol;
-                    s.optik_status = static_cast<std::uint8_t>(proj_status);
                     logger->log(s);
                 }
             }
@@ -554,20 +535,14 @@ namespace {
         trajectories::JointPTP a_traj(q_home, q_start, kPhaseDuration);
         if (!run_joint_ptp_hw(hw, model, data, joint_ctrl, a_traj, state, vel)) { return false; }
 
+        // Safety disabled to match Variant A (sim, velocity): the four-way comparison
+        // (A/B/C/D) isolates interface and admittance effects without confounding with
+        // safety-layer overhead.  Re-enable with care for production deployment.
         controllers::GeometricPController ctrl(model);
         ctrl.gains.kp_pos.setConstant(kKpPosKin);
         ctrl.gains.kp_rot.setConstant(kKpRotKin);
         ctrl.use_feedforward = true;
-        ctrl.constraint_aware = true;
-        ctrl.attach_collision(col_model, col_data);
-        ctrl.optimal_ik_options.dt = kHardwareControlPeriodS;
-
-        // Pre-flight validation.
-        const auto val = validate_trajectory(model, data, col_model, col_data, traj, q_start, ctrl);
-        if (val.status != ValidationStatus::OK) {
-            std::cerr << "[3A-C] Safety validation failed: " << val.reason << "\n";
-            return false;
-        }
+        ctrl.constraint_aware = false;
 
         const std::string trial_name = diagnostics::make_trial_name(
             "hardware", controllers::GeometricPController::kName,
@@ -628,9 +603,12 @@ namespace {
     //   2. AdmittanceLayer (1st-order ODE: M_v v_dot + D_v v = tau) with a
     //      velocity feedforward v_ff = DLS-IDK(Ad_{g_e} * xi_d) that bypasses
     //      the low-pass so moving targets are tracked without phase lag.
-    //   3. safe_velocity_projection: projects the admittance output to the
-    //      nearest joint velocity satisfying hard position/velocity limits and
-    //      soft self-collision avoidance (kinematic CBFs via OptIK QP).
+    //      The AdmittanceLayer applies its own velocity-limit rescale internally.
+    //
+    // safe_velocity_projection is intentionally omitted here so the four-way
+    // comparison (A/B/C/D) isolates interface and admittance effects.  The full
+    // production cascade including the kinematic safety projection is documented
+    // in docs/admittance_and_safety.md.
     //
     // Admittance sizing: M_v = diag(M(q_start)) * mass_scale, D_v = cutoff * M_v.
     // Default cutoff 30 rad/s (~5 Hz) is well below the inner-servo bandwidth.
@@ -692,17 +670,15 @@ namespace {
         hw.read(state);
         admittance.seed_from(state.v);
 
-        // --- Kinematic safety filter options (dt must match control period). ---
-        OptimalIKOptions proj_opts;
-        proj_opts.dt = kHardwareControlPeriodS;
-
         // Pre-allocated scratch.
         Eigen::VectorXd v_ff(model.dof);
-        Eigen::VectorXd v_projected(model.dof);
 
+        // Safety (safe_velocity_projection) is disabled to match Variant C and keep
+        // the four-way comparison (A/B/C/D) free of safety-layer confounds.
+        // The admittance layer's own velocity-limit rescale remains active.
         const std::string trial_name = diagnostics::make_trial_name(
             "hardware", controllers::GeometricPDController::kName,
-            trajectories::TiltingCircle::kName, /*constraint=*/true, ctrl.use_feedforward,
+            trajectories::TiltingCircle::kName, /*constraint=*/false, ctrl.use_feedforward,
             /*suffix=*/"admittance");
         auto logger = make_logger("3a", model, trial_name, log_data);
 
@@ -737,20 +713,8 @@ namespace {
             }
 
             // 3. Admittance step (stateful 1st-order ODE + FF bypass + rescale).
+            //    The admittance layer applies its own velocity-limit rescale internally.
             admittance.apply(model, state.q, tau, v_ff, dt_ns, vel);
-
-            // 4. Kinematic safety projection: hard position/velocity limits +
-            //    soft self-collision avoidance via kinematic CBF QP.
-            //    compute_jacobians was already called inside ctrl.update above.
-            const OptimalIKStatus proj_status = safe_velocity_projection(
-                model, data, col_model, col_data, vel.v, v_projected, proj_opts);
-            if (proj_status == OptimalIKStatus::INFEASIBLE ||
-                proj_status == OptimalIKStatus::ERROR) {
-                debug::log("safe_velocity_projection failed; using admittance output directly");
-                // Admittance output already velocity-limit rescaled; use as fallback.
-            } else {
-                vel.v = v_projected;
-            }
 
             if (hw.write(vel) != InterfaceStatus::OK) { return false; }
 
@@ -758,22 +722,11 @@ namespace {
                 diagnostics::LogSample s;
                 diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
                 s.controller_status = static_cast<std::uint8_t>(cs);
-                // Torque triplet (tau_ctrl, tau_des, tau_safe) from the PD controller.
+                // Torque triplet from the PD controller.
                 diagnostics::fill_torque_diagnostics(s, ctrl);
                 // Velocity triplet from admittance: v_ctrl=v_state, v_des=v_state+v_ff,
-                // v_safe=post-rescale. v_safe is overwritten below if projection ran.
+                // v_safe=post-rescale (admittance's own velocity-limit rescale).
                 diagnostics::fill_admittance_diagnostics(s, admittance);
-                // If projection succeeded, update v_safe to reflect the projected value.
-                if (proj_status == OptimalIKStatus::OK || proj_status == OptimalIKStatus::RELAXED) {
-                    s.v_safe = v_projected;
-                }
-                s.optik_invoked = true;
-                s.optik_modified =
-                    (proj_status == OptimalIKStatus::OK ||
-                     proj_status == OptimalIKStatus::RELAXED) &&
-                    (v_projected - admittance.last_tick_diagnostics().v_safe).norm() >
-                        optik_defaults::kModifiedTol;
-                s.optik_status = static_cast<std::uint8_t>(proj_status);
                 logger->log(s);
             }
 

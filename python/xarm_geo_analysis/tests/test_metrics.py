@@ -505,3 +505,182 @@ class TestTrialLoad:
 
         exp = Experiment.load_dir(tmp_path)
         assert len(exp) == 3
+
+
+# ---------------------------------------------------------------------------
+# New metric tests
+# ---------------------------------------------------------------------------
+
+
+def _build_trial_with_extras(
+    e_I: np.ndarray | None = None,
+    obstacle_dist: np.ndarray | None = None,
+    v_ctrl: np.ndarray | None = None,
+    v_des: np.ndarray | None = None,
+    v_safe: np.ndarray | None = None,
+    tau_ctrl: np.ndarray | None = None,
+    tau_des: np.ndarray | None = None,
+    tau_safe: np.ndarray | None = None,
+) -> Trial:
+    """Minimal trial builder that also accepts e_I and obstacle distance columns."""
+    p = np.zeros((N, 3))
+    q = _identity_rotation_quat(N)
+    trial = _build_trial(
+        p,
+        p,
+        q,
+        q,
+        v_ctrl=v_ctrl,
+        v_des=v_des,
+        v_safe=v_safe,
+        tau_ctrl=tau_ctrl,
+        tau_des=tau_des,
+        tau_safe=tau_safe,
+    )
+    if e_I is not None:
+        for j, c in enumerate(
+            ["e_I.vx", "e_I.vy", "e_I.vz", "e_I.wx", "e_I.wy", "e_I.wz"]
+        ):
+            trial.df[c] = e_I[:, j]
+    if obstacle_dist is not None:
+        trial.df["obstacle_distance_min"] = obstacle_dist
+    return trial
+
+
+class TestErrorTwist:
+    def test_zero_twist_zero_error(self):
+        """Both twists zero => error twist is zero."""
+        from xarm_geo_analysis.metrics.tracking import error_twist, error_twist_norm
+
+        p = np.zeros((N, 3))
+        q = _identity_rotation_quat(N)
+        trial = _build_trial(p, p, q, q)
+        # twist columns default to zeros in _build_trial
+        xi_e = error_twist(trial)
+        assert xi_e.shape == (N, 6)
+        np.testing.assert_allclose(xi_e, 0.0, atol=1e-12)
+        np.testing.assert_allclose(error_twist_norm(trial), 0.0, atol=1e-12)
+
+    def test_nonzero_actual_twist(self):
+        """Constant actual twist, zero target => error == actual."""
+        from xarm_geo_analysis.metrics.tracking import error_twist
+
+        p = np.zeros((N, 3))
+        q = _identity_rotation_quat(N)
+        trial = _build_trial(p, p, q, q)
+        # Set actual twist to a constant value; target remains zero.
+        for j, c in enumerate(
+            [
+                "ee_twist_actual.vx",
+                "ee_twist_actual.vy",
+                "ee_twist_actual.vz",
+                "ee_twist_actual.wx",
+                "ee_twist_actual.wy",
+                "ee_twist_actual.wz",
+            ]
+        ):
+            trial.df[c] = float(j + 1)
+
+        xi_e = error_twist(trial)
+        for j in range(6):
+            np.testing.assert_allclose(xi_e[:, j], float(j + 1), atol=1e-10)
+
+
+class TestCommandNormSeries:
+    def test_velocity_mode_constant(self):
+        """Constant v_safe of ones => norm == sqrt(dof) for all ticks."""
+        from xarm_geo_analysis.metrics.effort import command_norm_series
+
+        v = np.ones((N, DOF))
+        trial = _build_trial_with_extras(v_ctrl=v, v_des=v, v_safe=v)
+        norms = command_norm_series(trial, kind="velocity")
+        assert norms.shape == (N,)
+        np.testing.assert_allclose(norms, math.sqrt(DOF), rtol=1e-10)
+
+    def test_torque_mode_zero(self):
+        """Zero tau_safe => norm == 0."""
+        from xarm_geo_analysis.metrics.effort import command_norm_series
+
+        tau = np.zeros((N, DOF))
+        trial = _build_trial_with_extras(tau_ctrl=tau, tau_des=tau, tau_safe=tau)
+        norms = command_norm_series(trial, kind="torque")
+        np.testing.assert_allclose(norms, 0.0, atol=1e-12)
+
+    def test_missing_triplet_returns_nan(self):
+        """No command data => all NaN."""
+        from xarm_geo_analysis.metrics.effort import command_norm_series
+
+        trial = _build_trial_with_extras()  # all triplets absent
+        norms = command_norm_series(trial, kind="velocity")
+        assert np.all(np.isnan(norms))
+
+
+class TestIntegratorStateNorm:
+    def test_blank_columns_nan(self):
+        """No e_I columns => all NaN."""
+        from xarm_geo_analysis.metrics.transient import integrator_state_norm
+
+        trial = _build_trial_with_extras()
+        norms = integrator_state_norm(trial)
+        assert np.all(np.isnan(norms))
+
+    def test_constant_e_I(self):
+        """Constant e_I = [1, 0, ...] => norm == 1 everywhere."""
+        from xarm_geo_analysis.metrics.transient import integrator_state_norm
+
+        e_I = np.zeros((N, 6))
+        e_I[:, 0] = 1.0
+        trial = _build_trial_with_extras(e_I=e_I)
+        norms = integrator_state_norm(trial)
+        assert norms.shape == (N,)
+        np.testing.assert_allclose(norms, 1.0, rtol=1e-10)
+
+
+class TestMinDistanceSeries:
+    def test_missing_column_nan(self):
+        """No obstacle column => all NaN."""
+        from xarm_geo_analysis.metrics.safety import min_distance_series
+
+        trial = _build_trial_with_extras()
+        d = min_distance_series(trial)
+        assert np.all(np.isnan(d))
+
+    def test_constant_distance(self):
+        """Constant 0.1 m distance => series is constant 0.1."""
+        from xarm_geo_analysis.metrics.safety import min_distance_series
+
+        d_val = np.full(N, 0.1)
+        trial = _build_trial_with_extras(obstacle_dist=d_val)
+        d = min_distance_series(trial)
+        np.testing.assert_allclose(d, 0.1, rtol=1e-10)
+
+
+class TestInterventionMagnitudeSeries:
+    def test_no_intervention_velocity(self):
+        """v_des == v_safe => series is zero."""
+        from xarm_geo_analysis.metrics.safety import intervention_magnitude_series
+
+        v = np.ones((N, DOF))
+        trial = _build_trial_with_extras(v_ctrl=v, v_des=v, v_safe=v)
+        delta = intervention_magnitude_series(trial, kind="velocity")
+        np.testing.assert_allclose(delta, 0.0, atol=1e-12)
+
+    def test_constant_intervention_torque(self):
+        """Constant 1 Nm difference per joint => norm == sqrt(dof)."""
+        from xarm_geo_analysis.metrics.safety import intervention_magnitude_series
+
+        tau_des = np.ones((N, DOF)) * 5.0
+        tau_safe = np.ones((N, DOF)) * 4.0
+        trial = _build_trial_with_extras(
+            tau_ctrl=tau_des, tau_des=tau_des, tau_safe=tau_safe
+        )
+        delta = intervention_magnitude_series(trial, kind="torque")
+        np.testing.assert_allclose(delta, math.sqrt(DOF), rtol=1e-10)
+
+    def test_missing_returns_nan(self):
+        """No torque data => all NaN."""
+        from xarm_geo_analysis.metrics.safety import intervention_magnitude_series
+
+        trial = _build_trial_with_extras()
+        delta = intervention_magnitude_series(trial, kind="torque")
+        assert np.all(np.isnan(delta))

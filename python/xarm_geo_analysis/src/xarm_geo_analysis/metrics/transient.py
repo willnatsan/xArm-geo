@@ -1,5 +1,5 @@
 """
-Transient-response metrics: overshoot and settling time.
+Transient-response metrics: overshoot, settling time, and integrator state.
 
 Settling-time band defaults match the plan specification:
     translational : 5 mm
@@ -131,6 +131,43 @@ def settling_time(
     )
 
     return {"trans_s": trans_s, "rot_s": rot_s, "riem_s": riem_s}
+
+
+# ---------------------------------------------------------------------------
+# PID integrator state
+# ---------------------------------------------------------------------------
+
+
+def integrator_state(trial: Trial) -> np.ndarray:
+    """Bhat-intrinsic integrator state e_I at each tick.
+
+    Reads the e_I.{vx,vy,vz,wx,wy,wz} columns logged by
+    fill_integrator_diagnostics.  All rows are NaN for trials where the
+    PID integrator was not active (blank columns in the CSV).
+
+    Returns
+    -------
+    (N, 6) array [vx, vy, vz, wx, wy, wz]; NaN for non-PID trials.
+    """
+    cols = ["e_I.vx", "e_I.vy", "e_I.vz", "e_I.wx", "e_I.wy", "e_I.wz"]
+    missing = [c for c in cols if c not in trial.df.columns]
+    if missing:
+        return np.full((len(trial.df), 6), np.nan)
+    return trial.df[cols].to_numpy(dtype=float)
+
+
+def integrator_state_norm(trial: Trial) -> np.ndarray:
+    """‖e_I‖₂ at each tick.
+
+    Returns
+    -------
+    (N,) array; NaN for non-PID trials.
+    """
+    e = integrator_state(trial)
+    norms = np.linalg.norm(e, axis=1)
+    all_nan_rows = np.all(~np.isfinite(e), axis=1)
+    norms[all_nan_rows] = np.nan
+    return norms
 
 
 # ---------------------------------------------------------------------------

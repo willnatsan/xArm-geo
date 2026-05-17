@@ -127,6 +127,57 @@ def kinematic_intervention_integral(trial: Trial) -> float:
     return float(np.trapezoid(delta, x=trial.t()))
 
 
+def min_distance_series(trial: Trial) -> np.ndarray:
+    """Per-tick minimum distance to the nearest collision pair.
+
+    Reads the obstacle_distance_min column logged by Exp 3B.
+    Returns NaN for trials where distance was not recorded.
+
+    Returns
+    -------
+    (N,) array in metres.
+    """
+    col = "obstacle_distance_min"
+    if col not in trial.df.columns:
+        return np.full(len(trial.df), np.nan)
+    return trial.df[col].to_numpy(dtype=float)
+
+
+def intervention_magnitude_series(trial: Trial, kind: str = "auto") -> np.ndarray:
+    """‖cmd_des − cmd_safe‖₂ at each tick (scalar time-series).
+
+    For torque-mode trials: ‖τ_des − τ_safe‖₂.
+    For velocity-mode trials: ‖v_des − v_safe‖₂.
+
+    Parameters
+    ----------
+    kind : "torque", "velocity", or "auto" (infer from trial mode).
+
+    Returns
+    -------
+    (N,) array; NaN where the relevant triplet is absent.
+    """
+    if kind == "auto":
+        kind = "torque" if trial.is_torque_mode() else "velocity"
+
+    if kind == "torque":
+        des = trial.tau_des()
+        safe = trial.tau_safe()
+    elif kind == "velocity":
+        des = trial.v_des()
+        safe = trial.v_safe()
+    else:
+        raise ValueError(f"Unknown kind '{kind}'; expected torque|velocity|auto")
+
+    if not np.any(np.isfinite(des)):
+        return np.full(len(trial.df), np.nan)
+
+    delta = np.linalg.norm(des - safe, axis=1)
+    all_nan_rows = np.all(~np.isfinite(des), axis=1)
+    delta[all_nan_rows] = np.nan
+    return delta
+
+
 def optik_activity(trial: Trial) -> dict[str, object]:
     """Detailed breakdown of OptIK / velocity-rescale layer activity.
 

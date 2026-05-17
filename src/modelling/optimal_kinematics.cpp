@@ -351,7 +351,7 @@ namespace xarm_geo {
 
                 const auto status = optimal_inverse_diff_kinematics(
                     model, data, &col_model, &col_data, tasks, constraints, barriers, ik_opts);
-                if (status != OptimalIKStatus::OK) { break; }
+                if (status != OptimalIKStatus::OK && status != OptimalIKStatus::RELAXED) { break; }
 
                 // Composable solver returns rad/s; integrate over step_dt.
                 data.q_out += data.v_out * step_dt;

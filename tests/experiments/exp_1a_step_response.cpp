@@ -73,8 +73,10 @@ namespace {
     constexpr double kPhaseDuration = 3.0;
 
     // Step magnitude.  At 178 deg we are 2 deg from the SO(3) antipodal set
-    // theta = pi, exercising the trace-gradient saddle (Variants A/B) and
-    // pushing Variant C's log-map gradient close to its dr_exp singularity.
+    // theta = pi, exercising the trace-gradient saddle (Variant B) and pushing
+    // Variant C's log-map gradient close to its dr_exp singularity.
+    // Note: LargeOrientationStep::kName documents a default of 175 deg; the
+    // experiment overrides that with 178 deg for a more severe test.
     constexpr double kStepAngleDeg = 178.0;
 
     // --- Variant descriptor ---

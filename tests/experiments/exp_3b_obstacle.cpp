@@ -106,12 +106,13 @@ namespace {
     constexpr double kKpPosKin = 8.0;
     constexpr double kKpRotKin = 8.0;
 
-    // Torque-mode translational gains (same as validate_torque.cpp / exp_2).
+    // Torque-mode translational gains — match exp_2 for
+    // consistency across all torque-mode experiments.
     constexpr double kKpPos = 2000.0;
     constexpr double kKdLin = 280.0;
 
-    constexpr double kKpRot = 60.0;
-    constexpr double kKdAng = 2.4;
+    constexpr double kKpRot = 100.0;
+    constexpr double kKdAng = 5.0;
 
     // -------------------------------------------------------------------------
     // build_obstacle_collision_model()
@@ -301,7 +302,11 @@ namespace {
         const std::string trial_name = diagnostics::make_trial_name(
             "sim", controllers::GeometricPController::kName, trajectories::ObstacleLine::kName,
             ctrl.constraint_aware, ctrl.use_feedforward);
-        auto logger = make_logger("3b", model, trial_name, log_data);
+        auto logger = make_logger("3b", model, trial_name, log_data,
+                                  {{"obstacle_x", obstacle_pos.x()},
+                                   {"obstacle_y", obstacle_pos.y()},
+                                   {"obstacle_z", obstacle_pos.z()},
+                                   {"obstacle_radius", kObstacleRadius}});
 
         const double physics_dt = kSimulationPhysicsPeriodS;
         double render_dt = 1.0 / 60.0;
@@ -341,6 +346,9 @@ namespace {
                     diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
                     s.controller_status = static_cast<std::uint8_t>(cs);
                     diagnostics::fill_velocity_diagnostics(s, ctrl);
+                    // Geometry poses were updated inside OptIK; query min-distance directly.
+                    s.obstacle_distance_min =
+                        compute_min_distance(col_model, col_data).min_distance;
                     logger->log(s);
                 }
             }
@@ -432,7 +440,11 @@ namespace {
         const std::string trial_name = diagnostics::make_trial_name(
             "sim", controllers::GeometricPDController::kName, trajectories::ObstacleLine::kName,
             ctrl.constraint_aware, ctrl.use_feedforward);
-        auto logger = make_logger("3b", model, trial_name, log_data);
+        auto logger = make_logger("3b", model, trial_name, log_data,
+                                  {{"obstacle_x", obstacle_pos.x()},
+                                   {"obstacle_y", obstacle_pos.y()},
+                                   {"obstacle_z", obstacle_pos.z()},
+                                   {"obstacle_radius", kObstacleRadius}});
 
         const double physics_dt = kSimulationPhysicsPeriodS;
         double render_dt = 1.0 / 60.0;
@@ -472,6 +484,9 @@ namespace {
                     diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
                     s.controller_status = static_cast<std::uint8_t>(cs);
                     diagnostics::fill_torque_diagnostics(s, ctrl);
+                    // Geometry poses were updated inside ASIF; query min-distance directly.
+                    s.obstacle_distance_min =
+                        compute_min_distance(col_model, col_data).min_distance;
                     logger->log(s);
                 }
             }
@@ -559,7 +574,11 @@ namespace {
         const std::string trial_name = diagnostics::make_trial_name(
             "hardware", controllers::GeometricPController::kName, trajectories::ObstacleLine::kName,
             ctrl.constraint_aware, ctrl.use_feedforward);
-        auto logger = make_logger("3b", model, trial_name, log_data);
+        auto logger = make_logger("3b", model, trial_name, log_data,
+                                  {{"obstacle_x", obstacle_pos.x()},
+                                   {"obstacle_y", obstacle_pos.y()},
+                                   {"obstacle_z", obstacle_pos.z()},
+                                   {"obstacle_radius", kObstacleRadius}});
 
         const double dt = kHardwareControlPeriodS;
         const auto dt_ns =
@@ -588,6 +607,8 @@ namespace {
                 diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
                 s.controller_status = static_cast<std::uint8_t>(cs);
                 diagnostics::fill_velocity_diagnostics(s, ctrl);
+                // Geometry poses were updated inside OptIK; query min-distance directly.
+                s.obstacle_distance_min = compute_min_distance(col_model, col_data).min_distance;
                 logger->log(s);
             }
 

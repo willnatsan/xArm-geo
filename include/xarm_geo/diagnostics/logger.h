@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,6 +29,8 @@ namespace xarm_geo::diagnostics {
     //   task state    : ee_pose_actual, ee_pose_target (quaternion xyzw), ee_twist_actual/target
     //   torque triplet: tau_ctrl, tau_des, tau_safe (dynamic controllers; empty in velocity mode)
     //   velocity trip.: v_ctrl, v_des, v_safe (kinematic controllers; empty in torque mode)
+    //   integrator    : e_I.{vx,vy,vz,wx,wy,wz} (PID controllers only; blank otherwise)
+    //   obstacle      : obstacle_distance_min (collision experiments only; NaN otherwise)
     //   diagnostics   : controller_status, asif_status, asif_invoked, asif_modified,
     //                   optik_status, optik_invoked, optik_modified
     //
@@ -72,6 +76,19 @@ namespace xarm_geo::diagnostics {
         Eigen::VectorXd v_des;
         Eigen::VectorXd v_safe;
 
+        // --- PID Integrator State (GeometricPIDController only) ---
+        //
+        // e_I : Bhat-intrinsic integrator state (body-frame SE(3) twist).
+        //       Blank (e_I_valid = false) for all non-PID controllers.
+        manifold::SE3::Twist e_I = manifold::SE3::Twist::Zero();
+        bool e_I_valid = false;
+
+        // --- Obstacle Distance (collision experiments only) ---
+        //
+        // Minimum signed distance between any collision pair this tick.
+        // NaN when not computed (non-obstacle experiments).
+        double obstacle_distance_min = std::numeric_limits<double>::quiet_NaN();
+
         // --- Controller / Solver Diagnostics ---
         //
         // 0xFF signals "not invoked this tick" for status bytes.
@@ -106,6 +123,12 @@ namespace xarm_geo::diagnostics {
             std::size_t reserve_samples = 16000;  // pre-allocated rows
             int decimation = 1;                   // log every Nth call; 1 = log all
             std::int64_t skip_first = 0;          // drop the first N calls (warm-up)
+
+            // Arbitrary per-trial scalars written verbatim into the .meta.json sidecar.
+            // Experiments use this for constants that apply to the whole trial rather
+            // than per-tick (e.g. disturbance window, obstacle geometry).
+            // Values must be finite doubles; non-finite entries are silently dropped.
+            std::map<std::string, double> extra_meta;
         };
 
         // Captures tau_max, q_max, v_max from the model for the sidecar.
@@ -150,7 +173,7 @@ namespace xarm_geo::diagnostics {
     //
     // Composes a self-describing trial filename stem from the controller class
     // name, trajectory class name, and active flags.  Example output:
-    //   "sim_GeometricPDController_PipeInspection_safe_ff"
+    //   "sim_GeometricPDController_FigureEight_safe_ff"
     //
     // `backend`      : "sim" or "hardware".
     // `controller`   : controller::kName (or any string_view).
@@ -198,5 +221,14 @@ namespace xarm_geo::diagnostics {
     // Does not touch the optik_* fields; fill those separately if safe_velocity_projection
     // was also called (see exp_3a_sim_hw.cpp for the combined pattern).
     void fill_admittance_diagnostics(LogSample &s, const AdmittanceLayer &a) noexcept;
+
+    // Fills the PID integrator state from GeometricPIDController::integrator_state().
+    // Sets e_I_valid = true; leaves all other fields unchanged.
+    // Call immediately after update() for the PID variant; other variants leave
+    // e_I_valid = false (blank cells in CSV).
+    //
+    // Takes integrator_state() by value to avoid pulling in the full controller
+    // header from logger.h.  Callers pass `ctrl.integrator_state()` directly.
+    void fill_integrator_diagnostics(LogSample &s, const manifold::SE3::Twist &e_I) noexcept;
 
 }  // namespace xarm_geo::diagnostics

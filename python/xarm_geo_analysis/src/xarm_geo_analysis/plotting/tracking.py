@@ -7,12 +7,14 @@ All rotation data is read from quaternion columns; no Euler angles are used.
 from __future__ import annotations
 
 import math
+from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 
 from xarm_geo_analysis.metrics.tracking import (
+    error_twist_norm,
     riemannian_se3_error,
     rotational_geodesic_error,
     translational_error,
@@ -35,7 +37,7 @@ from xarm_geo_analysis.plotting.style import (
     TITLE_SEP,
     style_axes_3d,
 )
-from xarm_geo_analysis.trial import Trial
+from xarm_geo_analysis.trial import Experiment, Trial
 
 # Axis-length for EE frame triads in the 3-D path plot (metres).
 _TRIAD_LENGTH: float = 0.02
@@ -299,5 +301,275 @@ def plot_3d_path(
     ax.set_ylim3d(mid[1] - half, mid[1] + half)
     ax.set_zlim3d(mid[2] - half, mid[2] + half)
 
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Multi-trial 3-D path overlay
+# ---------------------------------------------------------------------------
+
+
+def plot_3d_paths_compare(
+    experiment: Experiment,
+    obstacle: Optional[Tuple[np.ndarray, float]] = None,
+    show_reference: bool = True,
+    figsize: tuple[float, float] = (10, 8),
+) -> Figure:
+    """3-D overlay of actual EE paths across all trials in an experiment.
+
+    Parameters
+    ----------
+    experiment    : Experiment containing the trials to compare.
+    obstacle      : (center, radius) tuple to draw a sphere.  If None the
+                    function auto-reads obstacle_{x,y,z,radius} from the first
+                    trial's sidecar meta; omits the sphere when both sources
+                    are absent.
+    show_reference: if True, plot the target path of the first trial as a
+                    dashed reference (all trials share the same target for
+                    comparative experiments).
+    figsize       : matplotlib figure size.
+
+    Returns
+    -------
+    matplotlib Figure.
+    """
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection="3d")
+
+    all_pts: list[np.ndarray] = []
+
+    # Dashed reference from the first trial.
+    trials = list(experiment)
+    if show_reference and trials:
+        p_ref = trials[0].p_target()
+        ax.plot(
+            p_ref[:, 0],
+            p_ref[:, 1],
+            p_ref[:, 2],
+            color=COLOR_TARGET,
+            linewidth=LW_REFERENCE,
+            linestyle="--",
+            alpha=ALPHA_PATH_MUTED,
+            label="Reference (unconstrained)",
+        )
+        all_pts.append(p_ref)
+
+    # Actual paths, one colour per trial.
+    prop_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    for i, trial in enumerate(trials):
+        p = trial.p_actual()
+        color = prop_cycle[i % len(prop_cycle)]
+        ax.plot(
+            p[:, 0],
+            p[:, 1],
+            p[:, 2],
+            color=color,
+            linewidth=LW_PATH,
+            alpha=ALPHA_PRIMARY,
+            label=trial.name,
+        )
+        all_pts.append(p)
+
+    # Obstacle sphere.
+    if obstacle is None and trials:
+        m = trials[0].meta
+        if "obstacle_x" in m and "obstacle_radius" in m:
+            center = np.array([m["obstacle_x"], m["obstacle_y"], m["obstacle_z"]])
+            obstacle = (center, float(m["obstacle_radius"]))
+
+    if obstacle is not None:
+        center, radius = obstacle
+        u, v = np.mgrid[0 : 2 * np.pi : 24j, 0 : np.pi : 13j]
+        xs = center[0] + radius * np.cos(u) * np.sin(v)
+        ys = center[1] + radius * np.sin(u) * np.sin(v)
+        zs = center[2] + radius * np.cos(v)
+        ax.plot_wireframe(
+            xs,
+            ys,
+            zs,
+            color="red",
+            alpha=0.25,
+            linewidth=0.5,
+            label=f"Obstacle (r={radius:.2f} m)",
+        )
+        all_pts.append(
+            np.array(
+                [
+                    [center[0] - radius, center[1] - radius, center[2] - radius],
+                    [center[0] + radius, center[1] + radius, center[2] + radius],
+                ]
+            )
+        )
+
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_zlabel("Z (m)")
+    ax.set_title("End-Effector Path Comparison")
+    ax.legend()
+    style_axes_3d(ax)
+
+    if all_pts:
+        pts = np.vstack(all_pts)
+        mins = pts.min(axis=0)
+        maxs = pts.max(axis=0)
+        mid = (mins + maxs) / 2
+        half = max(np.max(maxs - mins) / 2, 0.05)
+        ax.set_xlim3d(mid[0] - half, mid[0] + half)
+        ax.set_ylim3d(mid[1] - half, mid[1] + half)
+        ax.set_zlim3d(mid[2] - half, mid[2] + half)
+
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Error-twist overlay
+# ---------------------------------------------------------------------------
+
+
+def plot_error_twist_overlay(
+    experiment: Experiment,
+    figsize: tuple[float, float] = (10, 5),
+) -> Figure:
+    """Overlay ‖ξ_e‖₂(t) for all trials in an experiment.
+
+    Useful for Exp 1A: highlights the difference between LieGroup (error
+    twist starts near zero, ramps up) and LieAlgebra (peaks immediately).
+
+    Returns
+    -------
+    matplotlib Figure.
+    """
+    from xarm_geo_analysis.plotting.style import LW_PRIMARY, ALPHA_PRIMARY
+
+    fig, ax = plt.subplots(figsize=figsize)
+    for trial in experiment:
+        ax.plot(
+            trial.t(),
+            error_twist_norm(trial),
+            linewidth=LW_PRIMARY,
+            alpha=ALPHA_PRIMARY,
+            label=trial.name,
+        )
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel(r"$\|\xi_e\|_2$  (m/s + rad/s)")
+    ax.set_title("Error Twist Norm Comparison")
+    ax.legend()
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Per-axis 1-D position zoom
+# ---------------------------------------------------------------------------
+
+
+def plot_axis_zoom(
+    trial: Trial,
+    axis: str = "x",
+    t_window: Optional[Tuple[float, float]] = None,
+    figsize: tuple[float, float] = (10, 4),
+) -> Figure:
+    """Actual vs. target position along a single Cartesian axis.
+
+    Parameters
+    ----------
+    axis     : "x", "y", or "z".
+    t_window : (t_start, t_end) to zoom; None = full trial.
+    figsize  : matplotlib figure size.
+
+    Returns
+    -------
+    matplotlib Figure.
+    """
+    ax_idx = {"x": 0, "y": 1, "z": 2}
+    if axis not in ax_idx:
+        raise ValueError(f"Unknown axis '{axis}'; expected x|y|z")
+    idx = ax_idx[axis]
+
+    t = trial.t()
+    actual = trial.p_actual()[:, idx]
+    target = trial.p_target()[:, idx]
+
+    if t_window is not None:
+        mask = (t >= t_window[0]) & (t <= t_window[1])
+        t, actual, target = t[mask], actual[mask], target[mask]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(
+        t,
+        target * 1e3,
+        color=COLOR_TARGET,
+        linewidth=LW_REFERENCE,
+        linestyle="--",
+        alpha=ALPHA_PATH_MUTED,
+        label="Target",
+    )
+    ax.plot(
+        t,
+        actual * 1e3,
+        color=COLOR_ACTUAL,
+        linewidth=LW_PRIMARY,
+        alpha=ALPHA_PRIMARY,
+        label="Actual",
+    )
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel(f"{axis.upper()} position (mm)")
+    ax.set_title(f"{trial.name}{TITLE_SEP}{axis.upper()}-Axis Position")
+    ax.legend()
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Error distribution box plot
+# ---------------------------------------------------------------------------
+
+
+def plot_error_boxplot(
+    experiment: Experiment,
+    kind: str = "translational",
+    figsize: tuple[float, float] = (8, 5),
+) -> Figure:
+    """Box plot of per-trial tracking error distribution.
+
+    One box per trial; useful for Exp 3A four-way comparison
+    (Sim Kin / Sim Dyn / HW Kin / HW Dyn+Admittance).
+
+    Parameters
+    ----------
+    kind    : "translational" (mm), "rotational" (deg), or "riemannian".
+    figsize : matplotlib figure size.
+
+    Returns
+    -------
+    matplotlib Figure.
+    """
+    series: list[np.ndarray] = []
+    labels: list[str] = []
+    for trial in experiment:
+        if kind == "translational":
+            err = translational_error(trial) * 1e3
+            unit = "mm"
+        elif kind == "rotational":
+            err = np.degrees(rotational_geodesic_error(trial))
+            unit = "deg"
+        elif kind == "riemannian":
+            err = riemannian_se3_error(trial)
+            unit = ""
+        else:
+            raise ValueError(f"Unknown kind '{kind}'")
+        series.append(err[np.isfinite(err)])
+        # Shorten label to avoid overlong x-tick text.
+        labels.append(trial.name.replace("sim_", "S:").replace("hardware_", "HW:"))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.boxplot(series, labels=labels, notch=False, patch_artist=True)
+    ax.set_ylabel(
+        f"{kind.capitalize()} Error ({unit})" if unit else f"{kind.capitalize()} Error"
+    )
+    ax.set_title("Tracking Error Distribution")
+    plt.setp(ax.get_xticklabels(), rotation=20, ha="right", fontsize=8)
     fig.tight_layout()
     return fig

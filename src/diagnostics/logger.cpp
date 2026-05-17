@@ -1,5 +1,6 @@
 #include <xarm_geo/diagnostics/logger.h>
 
+#include <cmath>
 #include <format>
 #include <fstream>
 #include <iostream>
@@ -100,6 +101,14 @@ namespace xarm_geo::diagnostics {
             }
         }
 
+        // Write an SE(3) twist as six comma-separated cells; all blank when valid == false.
+        void write_twist(std::ostream &os, const Eigen::Matrix<double, 6, 1> &xi, bool valid) {
+            for (int i = 0; i < 6; ++i) {
+                if (i > 0) { os << ','; }
+                if (valid) { write_double(os, xi[i]); }
+            }
+        }
+
     }  // namespace
 
     void DataLogger::write_csv_header(std::ostream &os) const {
@@ -139,6 +148,12 @@ namespace xarm_geo::diagnostics {
         write_vector_header(os, "v_ctrl", dof_);
         write_vector_header(os, "v_des", dof_);
         write_vector_header(os, "v_safe", dof_);
+
+        // PID integrator state.
+        os << ",e_I.vx,e_I.vy,e_I.vz,e_I.wx,e_I.wy,e_I.wz";
+
+        // Obstacle distance.
+        os << ",obstacle_distance_min";
 
         // Diagnostics.
         os << ",controller_status"
@@ -199,6 +214,14 @@ namespace xarm_geo::diagnostics {
         write_vector(os, s.v_des, dof_);
         os << ',';
         write_vector(os, s.v_safe, dof_);
+
+        // PID integrator state.
+        os << ',';
+        write_twist(os, s.e_I, s.e_I_valid);
+
+        // Obstacle distance (blank = NaN, meaning not computed this tick).
+        os << ',';
+        write_double(os, s.obstacle_distance_min);
 
         // Diagnostics.
         os << ',';
@@ -268,6 +291,14 @@ namespace xarm_geo::diagnostics {
         write_json_vec("q_max", q_max_);
         os << ",\n";
         write_json_vec("v_max", v_max_);
+
+        // Extra per-trial metadata supplied by the experiment binary.
+        for (const auto &[key, val] : cfg_.extra_meta) {
+            if (!std::isfinite(val)) { continue; }
+            os << ",\n";
+            os << "  \"" << key << "\": " << val;
+        }
+
         os << "\n}\n";
     }
 
@@ -372,6 +403,11 @@ namespace xarm_geo::diagnostics {
         s.v_ctrl = d.v_state;  // admittance ODE state (pre-feedforward)
         s.v_des = d.v_des;     // v_state + v_ff (pre-rescale)
         s.v_safe = d.v_safe;   // post velocity-limit rescale
+    }
+
+    void fill_integrator_diagnostics(LogSample &s, const manifold::SE3::Twist &e_I) noexcept {
+        s.e_I = e_I;
+        s.e_I_valid = true;
     }
 
 }  // namespace xarm_geo::diagnostics

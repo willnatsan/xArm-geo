@@ -118,6 +118,37 @@ def joint_velocity_saturation_fraction(
 # ---------------------------------------------------------------------------
 
 
+def command_norm_series(trial: Trial, kind: str = "auto") -> np.ndarray:
+    """‖cmd_safe‖₂ at each tick (scalar time-series).
+
+    Reads the applied command — tau_safe for torque-mode trials, v_safe for
+    kinematic trials — and returns its Euclidean norm per tick.
+
+    Parameters
+    ----------
+    kind : "torque", "velocity", or "auto" (infer from trial mode).
+
+    Returns
+    -------
+    (N,) array; NaN rows where the relevant triplet is absent.
+    """
+    if kind == "auto":
+        kind = "torque" if trial.is_torque_mode() else "velocity"
+
+    if kind == "torque":
+        cmd = trial.tau_safe()
+    elif kind == "velocity":
+        cmd = trial.v_safe()
+    else:
+        raise ValueError(f"Unknown kind '{kind}'; expected torque|velocity|auto")
+
+    norms = np.linalg.norm(cmd, axis=1)  # (N,)
+    # Rows that were blank in the CSV arrive as NaN; their norm is also NaN.
+    all_nan_rows = np.all(~np.isfinite(cmd), axis=1)
+    norms[all_nan_rows] = np.nan
+    return norms
+
+
 def per_joint_position_rmse(trial: Trial) -> np.ndarray:
     """RMSE of joint-position tracking error per joint (dof,).
 

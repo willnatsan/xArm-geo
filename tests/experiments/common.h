@@ -10,11 +10,13 @@
 //   - run_joint_ptp_hw(): Phase 0/1/3 hardware runner (joint-PTP via JointPController).
 //   - setup_results_dir(): creates tests/results/exp_<id>/ if absent.
 //   - make_logger(): DataLogger configured for per-experiment output paths.
+//     Accepts an optional extra_meta map that is forwarded to the .meta.json
+//     sidecar (e.g. disturbance window, obstacle geometry).
 //
 // Usage pattern in each experiment binary:
 //   #include "experiments/common.h"
 //   // ... setup model, sim/hw ...
-//   auto logger = make_logger("1a", model, trial_name);
+//   auto logger = make_logger("1a", model, trial_name, log_data, {{"key", val}});
 //
 // All helpers are in namespace xarm_geo::experiments.
 
@@ -23,6 +25,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <numbers>
 #include <numeric>
 #include <optional>
@@ -230,7 +233,8 @@ namespace xarm_geo::experiments {
     // Returns std::nullopt when log_data is false.
 
     [[nodiscard]] inline auto make_logger(std::string_view exp_id, const Model &model,
-                                          const std::string &trial_name, bool log_data)
+                                          const std::string &trial_name, bool log_data,
+                                          std::map<std::string, double> extra_meta = {})
         -> std::optional<diagnostics::DataLogger> {
         if (!log_data) { return std::nullopt; }
         const std::string path =
@@ -238,6 +242,7 @@ namespace xarm_geo::experiments {
         return diagnostics::DataLogger(model, diagnostics::DataLogger::Config{
                                                   .output_path = path,
                                                   .trial_name = trial_name,
+                                                  .extra_meta = std::move(extra_meta),
                                               });
     }
 

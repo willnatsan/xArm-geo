@@ -118,10 +118,22 @@ exp-3b-hw = { cmd = "./build/exp_3b_obstacle --hw {{ ip }} --log true", args = [
 #         pixi run report-exp 2
 report-exp = { cmd = "python -m xarm_geo_analysis.cli report tests/results/exp_{{ id }}/", args = [{ arg = "id" }] }
 
-# Usage:  pixi run plot-exp 1a --save-dir paper/figures/exp_1a/
-# Note: overlay compare requires listing individual CSVs; use the bash helper
-# below for convenience, or call 'pixi run analyse plot compare <csvs>...' directly.
-plot-exp = { cmd = "bash -c 'python -m xarm_geo_analysis.cli plot compare tests/results/exp_{{ id }}/*.csv --save-dir paper/figures/exp_{{ id }}/'", args = [{ arg = "id" }] }
+# Experiment-specific figure sets.  Each generates the canonical dissertation plots
+# for that experiment and saves them as PDFs under paper/figures/exp_<id>/.
+# Usage:  pixi run plot-exp 1a
+#         pixi run plot-exp 3b
+# To save to a different directory, call the CLI directly:
+#   pixi run analyse plot exp 3b tests/results/exp_3b/ --save-dir /tmp/figs/
+# The generic 'plot compare' sub-command remains available for ad-hoc use:
+#   pixi run analyse plot compare tests/results/exp_1a/*.csv
+plot-exp = { cmd = "python -m xarm_geo_analysis.cli plot exp {{ id }} tests/results/exp_{{ id }}/ --save-dir paper/figures/exp_{{ id }}/", args = [{ arg = "id" }] }
+
+# Convenience aliases for each experiment (no args required).
+plot-exp-1a = { cmd = "python -m xarm_geo_analysis.cli plot exp 1a tests/results/exp_1a/ --save-dir paper/figures/exp_1a/" }
+plot-exp-1b = { cmd = "python -m xarm_geo_analysis.cli plot exp 1b tests/results/exp_1b/ --save-dir paper/figures/exp_1b/" }
+plot-exp-2  = { cmd = "python -m xarm_geo_analysis.cli plot exp 2  tests/results/exp_2/  --save-dir paper/figures/exp_2/" }
+plot-exp-3a = { cmd = "python -m xarm_geo_analysis.cli plot exp 3a tests/results/exp_3a/ --save-dir paper/figures/exp_3a/" }
+plot-exp-3b = { cmd = "python -m xarm_geo_analysis.cli plot exp 3b tests/results/exp_3b/ --save-dir paper/figures/exp_3b/" }
 
 # --- Separate Environment for Code Quality ---
 [feature.lint.dependencies]

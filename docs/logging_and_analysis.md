@@ -92,14 +92,14 @@ The five-line pattern used in `simulation_test.cpp` and
 #include <optional>
 #include <xarm_geo/diagnostics/logger.h>
 #include <xarm_geo/examples/controllers/geometric_p_controller.h>
-#include <xarm_geo/examples/trajectories/pipe_inspection.h>
+#include <xarm_geo/examples/trajectories/figure_eight.h>
 
 // --- Before the control loop ---
 
 const std::string trial_name = xarm_geo::diagnostics::make_trial_name(
     "sim",
     xarm_geo::controllers::GeometricPController::kName,
-    xarm_geo::trajectories::PipeInspection::kName,
+    xarm_geo::trajectories::FigureEight::kName,
     /*constraint=*/controller.constraint_aware,
     /*feedforward=*/controller.use_feedforward);
 
@@ -146,6 +146,8 @@ are used anywhere.
 | Task target | `ee_target.x/y/z`, `ee_target.qx/qy/qz/qw`, `ee_twist_target.vx/vy/vz/wx/wy/wz` | Always |
 | Torque triplet | `tau_ctrl.i`, `tau_des.i`, `tau_safe.i` | Dynamic (torque-mode) controllers; also populated by `fill_torque_diagnostics` in admittance-cascade pipelines |
 | Velocity triplet | `v_ctrl.i`, `v_des.i`, `v_safe.i` | Kinematic (velocity-mode) controllers, or any pipeline calling `fill_admittance_diagnostics`; blank in pure torque-mode trials |
+| PID integrator | `e_I.vx`, `e_I.vy`, `e_I.vz`, `e_I.wx`, `e_I.wy`, `e_I.wz` | `GeometricPIDController` only; call `fill_integrator_diagnostics(s, ctrl.integrator_state())`; blank for all other controllers |
+| Obstacle distance | `obstacle_distance_min` | Collision experiments (Exp 3B) only; set `s.obstacle_distance_min` directly; NaN otherwise |
 | Controller status | `controller_status`, `asif_status`, `asif_invoked`, `asif_modified`, `optik_status`, `optik_invoked`, `optik_modified` | Always; 255 (0xFF) means "not invoked" for status bytes |
 
 The torque triplet semantics:
@@ -174,9 +176,34 @@ v_safe  -- post velocity-limit rescale; overwritten with the safe_velocity_proje
            result when the experiment also runs the kinematic safety filter.
 ```
 
+### Per-Trial Sidecar Metadata
+
+`DataLogger::Config` accepts an `extra_meta` map of `std::string` → `double`
+pairs that are written verbatim as top-level fields in the `.meta.json` sidecar.
+Use this for experiment-level constants that do not vary per tick:
+
+```cpp
+// Exp 2: disturbance schedule
+auto logger = make_logger("2", model, trial_name, log_data,
+                          {{"disturbance_start_s", 5.0},
+                           {"disturbance_end_s",   10.0},
+                           {"disturbance_force_x_N", 10.0}});
+
+// Exp 3B: obstacle geometry
+auto logger = make_logger("3b", model, trial_name, log_data,
+                          {{"obstacle_x", pos.x()},
+                           {"obstacle_y", pos.y()},
+                           {"obstacle_z", pos.z()},
+                           {"obstacle_radius", 0.10}});
+```
+
+Python access: `trial.meta["disturbance_start_s"]` etc.  The plotting helpers
+`plot_tracking_with_disturbance` and `plot_3d_paths_compare` consume these
+fields automatically when present.
+
 ### Sample Assembly Helpers
 
-Four free functions in `xarm_geo/diagnostics/logger.h` fill the standard
+Six free functions in `xarm_geo/diagnostics/logger.h` fill the standard
 column groups from library types. Call them in sequence immediately after
 `update()`; each touches only its own group and leaves the rest unchanged.
 
@@ -209,6 +236,12 @@ void fill_velocity_diagnostics(LogSample &s,
 // AdmittanceLayer rather than a kinematic controller base.
 void fill_admittance_diagnostics(LogSample &s,
                                   const AdmittanceLayer &a) noexcept;
+
+// PID integrator side: fills e_I and sets e_I_valid = true.
+// Pass ctrl.integrator_state() directly; the function takes the SE3::Twist by
+// value to avoid a header dependency on the controller class.
+void fill_integrator_diagnostics(LogSample &s,
+                                  const manifold::SE3::Twist &e_I) noexcept;
 ```
 
 Typical combination for a kinematic task-space trial:
@@ -265,7 +298,7 @@ logger->log(s);
 Examples:
 
 ```
-sim_GeometricPDController_PipeInspection_safe_ff
+sim_GeometricPDController_FigureEight_safe_ff
 sim_EuclideanPController_FigureEight_ff
 hardware_GeometricPController_TiltingCircle_safe_ff
 ```
@@ -334,15 +367,16 @@ warranted.
 
 ### Decimation and Warm-Up
 
-`DataLogger::Config` exposes two optional knobs:
+`DataLogger::Config` exposes several optional fields:
 
 ```cpp
 xarm_geo::diagnostics::DataLogger::Config cfg{
     .output_path    = "tests/results/trial.csv",
     .trial_name     = trial_name,
     .reserve_samples = 16000,  // pre-allocate rows (default 16000)
-    .decimation     = 5,       // log every 5th call; 1 = log all (default)
-    .skip_first     = 250,     // drop the first 250 calls as warm-up (default 0)
+    .decimation     = 5,       // log every Nth call; 1 = log all (default)
+    .skip_first     = 250,     // drop the first N calls as warm-up (default 0)
+    .extra_meta     = {{"disturbance_start_s", 5.0}},  // written into .meta.json
 };
 ```
 
@@ -364,7 +398,7 @@ execution.
 ### CLI Sub-Commands
 
 The `xarm-geo-analyse` entry point (also reachable as
-`pixi run analyse`) exposes four sub-commands:
+`pixi run analyse`) exposes five sub-commands:
 
 **`plot trial <csv> [--save-dir DIR] [--format pdf|png] [--dpi N]`**
 
@@ -389,6 +423,26 @@ Three overlay figures, one line per trial:
 - Rotational geodesic error vs time.
 - Riemannian SE(3) error vs time.
 
+**`plot exp <id> <dir> [--save-dir DIR] [--format pdf|png] [--dpi N]`**
+
+Experiment-specific figure set.  Equivalent to `pixi run plot-exp <id>`.
+
+| `<id>` | Figures generated |
+|---|---|
+| `1a` | 3-D path overlay · geodesic error overlay · error-twist norm overlay |
+| `1b` | geodesic error overlay · control-effort norm overlay |
+| `2`  | tracking error with disturbance markers (translational + rotational) · PID integrator state |
+| `3a` | error distribution box plot (translational + rotational) · per-axis (X) position zoom per trial |
+| `3b` | 3-D path with obstacle sphere · obstacle distance vs. time · intervention-norm plot per trial |
+
+```bash
+# Exp 1A — all three variants must be in the directory
+xarm-geo-analyse plot exp 1a tests/results/exp_1a/ --save-dir paper/figures/exp_1a/
+
+# Exp 3B — interactive preview
+xarm-geo-analyse plot exp 3b tests/results/exp_3b/
+```
+
 **`report <csv-or-dir> [-o output]`**
 
 Loads every CSV in a directory (or a single CSV) and prints a
@@ -410,13 +464,13 @@ pixi run analyse metric safety_intervention_integral tests/results/trial.csv
 
 ### Saving for LaTeX
 
-Both plot sub-commands accept output flags. PDF is the default because it
-is a vector format and can be included directly in LaTeX with no
-conversion:
+All plot sub-commands (`trial`, `compare`, `exp`) accept the same output
+flags. PDF is the default because it is a vector format and can be
+included directly in LaTeX with no conversion:
 
 ```bash
 pixi run analyse plot trial \
-    tests/results/sim_GeometricPDController_PipeInspection_safe_ff.csv \
+    tests/results/sim_GeometricPDController_FigureEight_safe_ff.csv \
     --save-dir paper/figures/phase2/
 
 ```
@@ -425,16 +479,16 @@ Produces:
 
 ```
 paper/figures/phase2/
-├── sim_GeometricPDController_PipeInspection_safe_ff_tracking_errors.pdf
-├── sim_GeometricPDController_PipeInspection_safe_ff_settling.pdf
-├── sim_GeometricPDController_PipeInspection_safe_ff_3d_path.pdf
-└── sim_GeometricPDController_PipeInspection_safe_ff_torque_triplet.pdf
+├── sim_GeometricPDController_FigureEight_safe_ff_tracking_errors.pdf
+├── sim_GeometricPDController_FigureEight_safe_ff_settling.pdf
+├── sim_GeometricPDController_FigureEight_safe_ff_3d_path.pdf
+└── sim_GeometricPDController_FigureEight_safe_ff_torque_triplet.pdf
 ```
 
 Include in LaTeX:
 
 ```latex
-\includegraphics[width=\linewidth]{figures/phase2/sim_GeometricPDController_PipeInspection_safe_ff_tracking_errors.pdf}
+\includegraphics[width=\linewidth]{figures/phase2/sim_GeometricPDController_FigureEight_safe_ff_tracking_errors.pdf}
 ```
 
 All figures are saved with `bbox_inches="tight"` (no surrounding
@@ -456,9 +510,9 @@ directly in notebooks or analysis scripts.
 from xarm_geo_analysis import Trial, Experiment
 
 # Single trial.
-trial = Trial.load("tests/results/sim_GeometricPDController_PipeInspection_safe_ff.csv")
+trial = Trial.load("tests/results/sim_GeometricPDController_FigureEight_safe_ff.csv")
 
-print(trial.name)   # "sim_GeometricPDController_PipeInspection_safe_ff"
+print(trial.name)   # "sim_GeometricPDController_FigureEight_safe_ff"
 print(trial.dof)    # 6
 print(trial.dt)     # 0.002
 
@@ -540,6 +594,19 @@ trial by default. The Riemannian error uses weights
 `w_trans = w_rot = 1.0`; the combined band radius is
 `sqrt((5e-3)² + (π/180)²) ≈ 0.0181`.
 
+**Time-series functions** (not in `summarise()`; use directly):
+
+| Function | Returns | Notes |
+|---|---|---|
+| `error_twist(trial)` | `(N, 6)` rad/s, m/s | Body-frame velocity error `ξ_e = ξ_actual − Ad_{g_e} ξ_d` |
+| `error_twist_norm(trial)` | `(N,)` | `‖ξ_e‖₂` |
+| `phase_lag_seconds(trial, axis)` | scalar s | Cross-correlation lag; useful for Exp 3A admittance analysis |
+| `command_norm_series(trial)` | `(N,)` | `‖τ_safe‖₂` or `‖v_safe‖₂` depending on mode |
+| `integrator_state(trial)` | `(N, 6)` | `e_I` from PID controller; NaN for other controllers |
+| `integrator_state_norm(trial)` | `(N,)` | `‖e_I‖₂` |
+| `min_distance_series(trial)` | `(N,)` m | Obstacle distance; NaN when column absent |
+| `intervention_magnitude_series(trial)` | `(N,)` | `‖τ_des − τ_safe‖₂` or `‖v_des − v_safe‖₂` |
+
 ### Transient
 
 | Name | Units | Applies to |
@@ -609,6 +676,25 @@ Note: for `KinematicJointControllerBase` trials, `optik_invocation_rate`
 is always 0 (there is no QP in that base), and `optik_modification_rate`
 reflects direction-preserving velocity-limit rescaling rather than QP
 activity.
+
+### Plot Functions
+
+All plot functions live in `xarm_geo_analysis.plotting` and can be imported
+directly.  The table below lists the new functions added for the comparative
+experiments; the original functions (`plot_tracking_errors`, `plot_settling`,
+etc.) are unchanged.
+
+| Function | Input | Purpose |
+|---|---|---|
+| `plot_3d_paths_compare(exp, obstacle, show_reference)` | Experiment | Multi-trial 3-D overlay with optional obstacle sphere and dashed reference |
+| `plot_error_twist_overlay(exp)` | Experiment | `‖ξ_e‖₂(t)` per trial |
+| `plot_axis_zoom(trial, axis, t_window)` | Trial | Actual vs. target position along one Cartesian axis (mm) |
+| `plot_error_boxplot(exp, kind)` | Experiment | Box plot of error distribution; one box per trial |
+| `plot_tracking_with_disturbance(exp, kind)` | Experiment | Tracking error overlaid with disturbance window from sidecar |
+| `plot_integrator_state(trial)` | Trial | PID integrator state norms (linear + angular panels) |
+| `plot_obstacle_distance(exp)` | Experiment | `d_min(t)` per trial with `d = 0` reference line |
+| `plot_intervention_norm(trial)` | Trial | `‖cmd_des‖` vs. `‖cmd_safe‖` with shaded delta |
+| `plot_command_norm_overlay(exp, kind)` | Experiment | `‖cmd_safe‖₂(t)` per trial |
 
 ---
 

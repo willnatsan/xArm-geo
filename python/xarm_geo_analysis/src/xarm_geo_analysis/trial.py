@@ -214,6 +214,29 @@ class Trial:
     def optik_modified_mask(self) -> np.ndarray:
         return self.df["optik_modified"].to_numpy(dtype=bool)
 
+    # --- PID integrator state ---
+
+    def e_I(self) -> np.ndarray:
+        """Bhat integrator state (N, 6); NaN rows for non-PID trials."""
+        cols = ["e_I.vx", "e_I.vy", "e_I.vz", "e_I.wx", "e_I.wy", "e_I.wz"]
+        missing = [c for c in cols if c not in self.df.columns]
+        if missing:
+            return np.full((len(self.df), 6), np.nan)
+        return self.df[cols].to_numpy(dtype=float)
+
+    # --- Obstacle distance ---
+
+    def obstacle_distance_min(self) -> np.ndarray:
+        """Per-tick minimum distance to nearest collision pair (N,).
+
+        Returns NaN for trials where distance was not recorded (non-obstacle
+        experiments).
+        """
+        col = "obstacle_distance_min"
+        if col not in self.df.columns:
+            return np.full(len(self.df), np.nan)
+        return self.df[col].to_numpy(dtype=float)
+
     def is_torque_mode(self) -> bool:
         """True if the torque triplet contains any finite values."""
         tau = self.tau_ctrl()

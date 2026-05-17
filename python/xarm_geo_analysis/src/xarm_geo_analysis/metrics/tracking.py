@@ -167,6 +167,91 @@ def riemannian_rmse(
     return float(np.sqrt(np.mean(riemannian_se3_error(trial, w_trans, w_rot) ** 2)))
 
 
+def error_twist(trial: Trial) -> np.ndarray:
+    """Body-frame velocity error ξ_e = ξ_actual − Ad_{g_e} ξ_d at each tick.
+
+    g_e  = g_actual^{-1} * g_target  (right error)
+    ξ_d  = ee_twist_target  (target body twist, already in body frame)
+    Ad_{g_e} ξ_d transports ξ_d into the current body frame.
+
+    Both twists are read from the columns logged by fill_task_sample, so the
+    computation is purely offline and requires no Jacobian at analysis time.
+
+    Returns
+    -------
+    (N, 6) array [vx, vy, vz, wx, wy, wz] in m/s and rad/s.
+    """
+    p_err, q_err = _relative_pose(trial)  # g_e components
+    R_err = Rotation.from_quat(q_err)  # (N,) Rotation
+
+    xi_actual = trial.twist_actual()  # (N, 6)
+    xi_d = trial.twist_target()  # (N, 6)
+
+    # Ad_{g_e} = [[R_err, [p_err]_× R_err], [0, R_err]]  (6×6 per tick).
+    # Cheaper to compute the action directly per row rather than building 6x6.
+    # For a twist ξ = [v; ω]:
+    #   Ad_{g_e} [v_d; ω_d] = [R_err v_d + p_err × (R_err ω_d);  R_err ω_d]
+    R_mat = R_err.as_matrix()  # (N, 3, 3)
+    v_d = xi_d[:, :3]  # (N, 3)
+    w_d = xi_d[:, 3:]  # (N, 3)
+
+    R_w_d = np.einsum("nij,nj->ni", R_mat, w_d)  # R_err * ω_d  (N, 3)
+    R_v_d = np.einsum("nij,nj->ni", R_mat, v_d)  # R_err * v_d  (N, 3)
+
+    # p_err × (R_err ω_d) using broadcasting
+    cross = np.cross(p_err, R_w_d)  # (N, 3)
+
+    ad_xi_d = np.concatenate([R_v_d + cross, R_w_d], axis=1)  # (N, 6)
+    return xi_actual - ad_xi_d
+
+
+def error_twist_norm(trial: Trial) -> np.ndarray:
+    """‖ξ_e‖₂ at each tick (scalar time-series).
+
+    Returns
+    -------
+    (N,) array.
+    """
+    return np.linalg.norm(error_twist(trial), axis=1)
+
+
+def phase_lag_seconds(trial: Trial, axis: str = "vx") -> float:
+    """Temporal lag between target and actual EE twist via cross-correlation.
+
+    Estimates the number of seconds by which the actual signal lags the target,
+    restricted to the named twist axis.  Positive value means the actual signal
+    is delayed relative to the target.
+
+    Parameters
+    ----------
+    axis : one of "vx", "vy", "vz", "wx", "wy", "wz".
+
+    Returns
+    -------
+    Scalar lag in seconds; NaN if fewer than 4 samples or zero variance.
+    """
+    axis_map = {"vx": 0, "vy": 1, "vz": 2, "wx": 3, "wy": 4, "wz": 5}
+    if axis not in axis_map:
+        raise ValueError(f"Unknown axis '{axis}'; expected one of {list(axis_map)}")
+
+    idx = axis_map[axis]
+    target = trial.twist_target()[:, idx]
+    actual = trial.twist_actual()[:, idx]
+
+    if len(target) < 4:
+        return float("nan")
+
+    # Normalise to zero mean and unit variance.
+    def _norm(x):
+        mu, sigma = np.mean(x), np.std(x)
+        return (x - mu) / sigma if sigma > 1e-12 else x - mu
+
+    corr = np.correlate(_norm(actual), _norm(target), mode="full")
+    dt = float(trial.dt)
+    lags = np.arange(-(len(target) - 1), len(target)) * dt
+    return float(lags[int(np.argmax(corr))])
+
+
 def steady_state_rmse(
     trial: Trial,
     last_fraction: float = 0.2,

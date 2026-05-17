@@ -345,8 +345,10 @@ namespace {
     // so the inner actuator servo dynamics are present, mirroring the hardware
     // cascade.  Useful for tuning --cutoff and --mass-scale offline.
     //
-    // Key difference from Variant D: bias_compensation = Full because the sim
-    // does not apply internal gravity compensation (unlike the xArm SDK).
+    // The cascade is mechanically identical to Variant D: bias_compensation = None
+    // because the MuJoCo velocity actuator's kv servo opposes gravity through its
+    // velocity-tracking behaviour (v_actual != 0 on disturbance -> corrective torque),
+    // in the same way the xArm SDK velocity mode does.
 
     auto run_variant_E(Simulation &sim, const Model &model, Data &data, CollisionModel &col_model,
                        CollisionData &col_data, const Eigen::VectorXd &q_home, bool log_data,
@@ -382,7 +384,7 @@ namespace {
 
         // Sim stays in VELOCITY mode throughout (mirrors hardware mode 4).
 
-        // --- Torque controller (no ASIF; bias_compensation = Full for sim). ---
+        // --- Torque controller (no ASIF; matches Variant D). ---
         controllers::GeometricPDController ctrl(model);
         ctrl.gains.kp_pos.setConstant(kKpPosHw);
         ctrl.gains.kp_rot.setConstant(kKpRotHw);
@@ -390,8 +392,9 @@ namespace {
         ctrl.gains.kd_ang.setConstant(kKdAngHw);
         ctrl.use_feedforward = true;
         ctrl.constraint_aware = false;
-        // Sim has no internal gravity compensation; inject h(q,v) here.
-        ctrl.bias_compensation = BiasCompensation::Full;
+        // Velocity actuator holds pose against gravity via its velocity-tracking servo;
+        // do not double-count (same rationale as Variant D on the xArm SDK).
+        ctrl.bias_compensation = BiasCompensation::None;
 
         // --- Admittance layer: same sizing as Variant D. ---
         AdmittanceOptions adm_opts;

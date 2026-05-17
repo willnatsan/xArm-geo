@@ -63,9 +63,9 @@ hw.write(vel)
 ```
 
 See `tests/experiments/exp_3a_sim_hw.cpp` Variant D for the full hardware implementation.
-Variant E runs the same cascade against the MuJoCo simulator (velocity-mode interface, `bias_compensation = Full`) and is useful for tuning `--cutoff` / `--mass-scale` offline before deploying to hardware (`pixi run exp-3a-sim-admittance`).
+Variant E runs the mechanically identical cascade against the MuJoCo simulator and is useful for tuning `--cutoff` / `--mass-scale` offline before deploying to hardware (`pixi run exp-3a-sim-admittance`).
 
-`bias_compensation = None` is required because the xArm SDK applies internal gravity compensation; adding `g(q)` or `h(q,v)` again would cause the arm to drift at rest (residual torque -> non-zero admittance state).
+`bias_compensation = None` on both variants. A velocity-mode actuator's internal velocity-tracking servo opposes gravity through its feedback dynamics (any gravity-induced motion creates `v_actual != 0`, which the servo immediately corrects); the user must not add `g(q)` or `h(q,v)` in the controller. Adding either would inject non-zero torque at rest, drive the admittance state away from zero, and cause drift. This applies equally to the xArm SDK in mode 4 and to MuJoCo `<velocity>` actuators.
 
 ## Tuning guide
 

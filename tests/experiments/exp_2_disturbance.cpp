@@ -104,8 +104,8 @@ namespace {
     constexpr double kKdAng = 5.0;
 
     // Integral gains for PID variant (Bhat formulation, units [1/s]).
-    constexpr double kKiLin = 20.0;
-    constexpr double kKiAng = 20.0;
+    constexpr double kKiLin = 10.0;
+    constexpr double kKiAng = 10.0;
 
     // EE body name for wrench injection (matches the xArm6 MJCF body tree).
     constexpr std::string_view kEEBodyName = "link_eef";

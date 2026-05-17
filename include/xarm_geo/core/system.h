@@ -154,11 +154,16 @@ namespace xarm_geo {
             int current_m_eq = 0;
             int current_m_in = 0;
             bool initialised = false;
-            // True once qp->solve() has completed at least once. Guards against
-            // passing WARM_START_WITH_PREVIOUS_RESULT to a freshly-constructed QP
-            // whose LDLT has never been factorised (proxsuite 0.7.2 bug: the
-            // first solve skips setup_factorization when refactorize==false,
-            // leaving ldl.dim()==0 and causing a rank_r_update assertion).
+            // True once qp->solve() has completed at least once. Two purposes:
+            //   1. Guards against passing WARM_START_WITH_PREVIOUS_RESULT to a
+            //      freshly-constructed QP whose LDLT has never been factorised
+            //      (proxsuite 0.7.2 bug: the first solve skips
+            //      setup_factorization when refactorize==false, leaving
+            //      ldl.dim()==0 and causing a rank_r_update assertion).
+            //   2. Callers may explicitly set this to false at the top of an
+            //      entry point (e.g. optimal_inverse_kinematics) to force the
+            //      next solve onto NO_INITIAL_GUESS, isolating it from stale
+            //      primal/dual values left by a prior caller.
             bool solved_once = false;
         } optik;
 

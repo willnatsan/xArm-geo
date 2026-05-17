@@ -1,7 +1,7 @@
 // --- Experiment 1A: Large Angle Step Response ---
 //
 // Comparative study of three kinematic (velocity-mode) P controllers tracking
-// a large-angle orientation step (175 deg about (1,1,1)/sqrt(3) relative to
+// a large-angle orientation step (178 deg about (1,1,1)/sqrt(3) relative to
 // the anchor).
 //
 // Variants
@@ -15,10 +15,11 @@
 // attribute purely to the control law.  The sim runs in VELOCITY mode
 // throughout; torque is not used.
 //
-// The trajectory has infinite duration; the experiment runs each variant for
-// kStepDuration seconds, which is long enough to capture the full settling
-// transient.  The Phase 1 approach (home -> step start pose) uses a 3 s
-// joint-PTP move common to all variants.
+// The LargeOrientationStep trajectory holds the anchor for step_time = 0 s,
+// then immediately jumps to the target.  Phase 1 drives the robot to the
+// anchor (not the target) so Phase 2 begins with the full 178 deg error at
+// t = 0.  Total duration = LargeOrientationStep::hold_duration (8 s), which
+// is long enough to capture the full settling transient.
 //
 // Usage
 // -----
@@ -64,15 +65,17 @@ namespace {
     using namespace xarm_geo;
     using namespace xarm_geo::experiments;
 
-    // Hold time for the step response.  Long enough to capture settling transient.
-    constexpr double kStepDuration = 8.0;  // seconds
-
     // Shared proportional gains (identical across all three variants).
     constexpr double kKpPos = 8.0;
     constexpr double kKpRot = 8.0;
 
     // Joint-PTP approach / return duration.
     constexpr double kPhaseDuration = 3.0;
+
+    // Step magnitude.  At 178 deg we are 2 deg from the SO(3) antipodal set
+    // theta = pi, exercising the trace-gradient saddle (Variants A/B) and
+    // pushing Variant C's log-map gradient close to its dr_exp singularity.
+    constexpr double kStepAngleDeg = 178.0;
 
     // --- Variant descriptor ---
     struct Variant {
@@ -95,20 +98,20 @@ namespace {
                      const Eigen::VectorXd &q_home, const manifold::SE3 &anchor, bool log_data,
                      std::string_view suffix) -> bool {
 
-        // --- Phase 1: Home -> Step Target (via IK) ---
-        trajectories::LargeOrientationStep step_traj(anchor);
+        // Build the step trajectory: step_time = 0 so the jump is immediate at
+        // t = 0.  hold_duration provides the settling window.
+        trajectories::LargeOrientationStep step_traj(anchor,
+                                                     Eigen::Vector3d::Ones() / std::sqrt(3.0),
+                                                     kStepAngleDeg * std::numbers::pi / 180.0);
 
-        TaskTarget start_target;
-        if (step_traj.evaluate(0.0, start_target) != TrajectoryStatus::OK) {
-            std::cerr << "[1A] Failed to evaluate step trajectory start.\n";
-            return false;
-        }
-
-        // Collision-free IK to reach the step target pose.
-        const bool ik_ok =
-            optimal_inverse_kinematics(model, data, col_model, col_data, q_home, start_target.pose);
+        // --- Phase 1: Home -> Anchor (pre-step initial condition) ---
+        //
+        // Drive to the anchor pose, NOT the target.  This ensures Phase 2 begins
+        // with the full orientation error (178 deg) on the very first tick.
+        const bool ik_ok = optimal_inverse_kinematics(model, data, col_model, col_data, q_home,
+                                                      step_traj.anchor());
         if (!ik_ok) {
-            std::cerr << "[1A] IK failed for step target pose.\n";
+            std::cerr << "[1A] IK failed for anchor pose.\n";
             return false;
         }
         const Eigen::VectorXd q_start = data.q_out;
@@ -122,7 +125,7 @@ namespace {
 
         if (sim.read(state) != InterfaceStatus::OK) { return false; }
 
-        std::cout << "  [Phase 1] Home -> Step Start...\n";
+        std::cout << "  [Phase 1] Home -> Anchor...\n";
         trajectories::JointPTP approach(q_home, q_start, kPhaseDuration);
         if (!run_joint_ptp_sim(sim, model, data, joint_ctrl, approach, state, vel_target)) {
             std::cerr << "  [Phase 1] Failed.\n";
@@ -132,6 +135,15 @@ namespace {
 
         // --- Phase 2: Step Response ---
         std::cout << "  [Phase 2] Running step response...\n";
+
+        // Sanity: log initial error so regressions are immediately visible.
+        if (sim.read(state) != InterfaceStatus::OK) { return false; }
+        data.q = state.q;
+        compute_jacobians(model, data);
+        const manifold::SE3 g_e = data.ee_pose.inverse() * step_traj.target();
+        const manifold::SE3::Twist xi_e0 = g_e.log();
+        std::cout << "  [Phase 2] Init ||p_err|| = " << xi_e0.head<3>().norm()
+                  << " m,  ||log(R_e)|| = " << xi_e0.tail<3>().norm() << " rad\n";
 
         const std::string trial_name = diagnostics::make_trial_name(
             "sim", controller_name, trajectories::LargeOrientationStep::kName,
@@ -149,7 +161,8 @@ namespace {
         PerfStats perf;
         {
             const std::size_t expected =
-                static_cast<std::size_t>(kStepDuration / (kSafetyDecimationFactor * physics_dt)) +
+                static_cast<std::size_t>(step_traj.duration() /
+                                         (kSafetyDecimationFactor * physics_dt)) +
                 32;
             perf.reserve(expected);
         }
@@ -158,7 +171,7 @@ namespace {
         std::int64_t tick = 0;
         TaskTarget task_target;
 
-        while (t < kStepDuration && sim.is_running()) {
+        while (t < step_traj.duration() && sim.is_running()) {
             const auto step_start = std::chrono::steady_clock::now();
             if (sim.read(state) != InterfaceStatus::OK) { break; }
 

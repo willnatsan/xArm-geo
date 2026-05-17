@@ -516,7 +516,7 @@ All examples are in `include/xarm_geo/examples/trajectories/`.
 | `waypoint.h`         | `Waypoint`       | Task, freestanding| B-spline through explicit SE(3) waypoints.             |
 | `task_ptp.h`         | `TaskPTP`        | Task, freestanding| Minimum-jerk SE(3) geodesic between two poses; exact rest-to-rest endpoints; analytic body twist and spatial acceleration. |
 | `joint_ptp.h`        | `JointPTP`       | Joint, freestanding| Minimum-jerk point-to-point joint motion.             |
-| `large_orientation_step.h` | `LargeOrientationStep` | Task, freestanding | Discrete SE(3) setpoint step: zero translational, large pure-rotation error (default 175° about (1,1,1)/√3) near the SO(3) trace-gradient saddle set. |
+| `large_orientation_step.h` | `LargeOrientationStep` | Task, freestanding | Timed pure-rotation step: holds `anchor` for `step_time` s, then jumps to a pose rotated `angle` rad about `axis`. Default: 175° about (1,1,1)/√3 (SO(3) trace-gradient saddle set), `step_time=0`, `hold_duration=8 s`. `twist` and `spatial_acc` are zero throughout. Finite `duration() = step_time + hold_duration`. |
 
 ---
 
@@ -554,6 +554,25 @@ overload to validate a finite window:
 ```cpp
 validate_trajectory(..., setpoint, q_start, controller, /*explicit_duration=*/10.0);
 ```
+
+### Step-input trajectories and initial conditions
+
+`LargeOrientationStep` (and any trajectory whose `evaluate(0, .)` returns
+the pre-step pose) requires the plant to be at `traj.anchor()` before the
+control loop starts. If the robot is instead driven to the post-step target
+via IK first, the initial error at `t = 0` will be near zero and the
+step-response transient will not be captured. Always pass `traj.anchor()`
+as the IK target in the approach phase:
+
+```cpp
+trajectories::LargeOrientationStep step_traj(anchor);
+optimal_inverse_kinematics(model, data, ..., step_traj.anchor());  // correct
+// NOT: step_traj.target()                                         // wrong
+```
+
+Because `twist` and `spatial_acc` are zero throughout `LargeOrientationStep`, feedforward
+in geometric controllers contributes nothing across the discontinuity — this is
+intentional.
 
 ### Discontinuous derivatives at concatenation seams
 

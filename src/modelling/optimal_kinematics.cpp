@@ -25,8 +25,9 @@ namespace xarm_geo {
         // --- Helpers ---
 
         // Ensure the ProxQP solver is sized for (n, m_eq, m_in). On dimension
-        // change, reconstruct and reset init; otherwise reuse to keep the
-        // warm-start path active.
+        // change, reconstruct and reset init; otherwise reuse the existing
+        // instance.  Cold-starting between solves (initial_guess /
+        // update_preconditioner) is left to the caller.
         void ensure_qp(Data::OptIKWorkspace &ws, int n, int m_eq, int m_in) {
             if (ws.qp == nullptr || ws.current_n != n || ws.current_m_eq != m_eq ||
                 ws.current_m_in != m_in) {
@@ -182,12 +183,18 @@ namespace xarm_geo {
         Eigen::MatrixXd A_eq(0, n_dec);
         Eigen::VectorXd b_eq(0);
 
+        // Always re-equilibrate on update(): H = J(q)^T J(q) + reg*I changes
+        // substantially between inner iters (J drifts as q_out steps) and
+        // across calls (different IK problems reuse the same QP instance).
+        // A stale Ruiz preconditioner can drive the iterates to NaN.  Cost is
+        // dominated by the LDLT re-factorisation that happens anyway.
         if (n_in > 0) {
             if (!ws.initialised) {
                 ws.qp->init(ws.H, ws.g, A_eq, b_eq, ws.A, ws.l, ws.u);
                 ws.initialised = true;
             } else {
-                ws.qp->update(ws.H, ws.g, A_eq, b_eq, ws.A, ws.l, ws.u);
+                ws.qp->update(ws.H, ws.g, A_eq, b_eq, ws.A, ws.l, ws.u,
+                              /*update_preconditioner=*/true);
             }
         } else {
             Eigen::MatrixXd A_in(0, n_dec);
@@ -196,7 +203,8 @@ namespace xarm_geo {
                 ws.qp->init(ws.H, ws.g, A_eq, b_eq, A_in, l_in, u_in);
                 ws.initialised = true;
             } else {
-                ws.qp->update(ws.H, ws.g, A_eq, b_eq, A_in, l_in, u_in);
+                ws.qp->update(ws.H, ws.g, A_eq, b_eq, A_in, l_in, u_in,
+                              /*update_preconditioner=*/true);
             }
         }
 
@@ -316,6 +324,12 @@ namespace xarm_geo {
         std::span<const Task *const> tasks(task_ptrs);
         std::span<const Constraint *const> constraints(constraint_ptrs);
         std::span<const KinematicBarrier *const> barriers(barrier_ptrs);
+
+        // Cold-start the QP workspace: position-level IK is called rarely (once
+        // per phase setup), so cross-call warm-start gives negligible savings and
+        // risks a stale-guess RELAXED/INFEASIBLE on the first iter when the caller
+        // context has changed since the last solve.
+        data.optik.solved_once = false;
 
         data.q_guess = q_init;
 

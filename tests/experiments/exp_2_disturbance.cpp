@@ -13,8 +13,8 @@
 //   B) GeometricPDController (torque / dynamic mode)
 //        -- Damping-dominated rejection; persistent steady-state offset expected.
 //   C) GeometricPIDController (torque / dynamic mode)
-//        -- Bhat-intrinsic integral; drives steady-state error to zero after
-//           the disturbance is removed (and partially during it).
+//        -- Bhat-intrinsic integral; drives steady-state error to zero during and
+//           after the disturbance window.
 //
 // All variants use the same trajectory (WingInspection, 15 s) and receive
 // identical disturbance schedules:
@@ -26,7 +26,8 @@
 //   Variant A (kinematic):  kp_pos = kp_rot = 8.0
 //   Variants B/C (torque):  kp_pos = 2000, kp_rot = 100,
 //                           kd_lin = 280,  kd_ang = 5.0
-//   Variant C extra:        ki_lin = ki_ang = 2.0 [1/s]  (Bhat formulation)
+//   Variant C extra:        ki_lin = 4.0, ki_ang = 7.0 [1/s]  (Bhat formulation)
+//                           sigma_lin = 30.0, sigma_ang = 3.0  (anti-windup caps)
 //
 // The simulation is reset between variants (Phase 0: home) so all three start
 // from identical conditions.
@@ -104,8 +105,26 @@ namespace {
     constexpr double kKdAng = 5.0;
 
     // Integral gains for PID variant (Bhat formulation, units [1/s]).
-    constexpr double kKiLin = 10.0;
-    constexpr double kKiAng = 10.0;
+    // Placed below each sub-block's dominant PD pole (kp/kd) so the
+    // integrator pole stays out of the PD bandwidth (no curvature-driven
+    // ringing on the WingInspection reference) while providing enough
+    // authority to fully absorb the disturbance offset within the 5 s
+    // disturbance window:
+    //   linear:  kp_pos/kd_lin = 2000/280 ~ 7.14 rad/s  -> ki_lin ~ 4.0 /s
+    //   angular: kp_rot/kd_ang = 100/5    = 20.0 rad/s  -> ki_ang ~ 7.0 /s
+    constexpr double kKiLin = 4.0;
+    constexpr double kKiAng = 7.0;
+
+    // Anti-windup saturation bounds on the Bhat integrator state (engages
+    // the back-calculation clamp inside GeometricPIDController). Sized as
+    // ki * sigma = available integral wrench authority:
+    //   sigma_lin: ki_lin * sigma_lin = 120 N (12x the 10 N disturbance);
+    //              keeps the integrator out of saturation through the
+    //              disturbance window so the offset is fully absorbed.
+    //   sigma_ang: ki_ang * sigma_ang = 21 N·m; no commanded body torque
+    //              from the disturbance, so the cap stays tight.
+    constexpr double kSigmaLin = 30.0;
+    constexpr double kSigmaAng = 3.0;
 
     // EE body name for wrench injection (matches the xArm6 MJCF body tree).
     constexpr std::string_view kEEBodyName = "link_eef";
@@ -514,9 +533,12 @@ auto main(int argc, char *argv[]) -> int {
         ctrl_c.gains.kp_rot.setConstant(kKpRot);
         ctrl_c.gains.kd_lin.setConstant(kKdLin);
         ctrl_c.gains.kd_ang.setConstant(kKdAng);
-        // Bhat-intrinsic integrator gains [1/s]; tau_i ~ 0.5 s.
+        // Bhat-intrinsic integrator gains [1/s]; per-sub-block (see kKiLin / kKiAng).
         ctrl_c.gains.ki_lin.setConstant(kKiLin);
         ctrl_c.gains.ki_ang.setConstant(kKiAng);
+        // Engage anti-windup so the back-calculation clamp bounds e_I.
+        ctrl_c.sigma_lin.setConstant(kSigmaLin);
+        ctrl_c.sigma_ang.setConstant(kSigmaAng);
         ctrl_c.use_feedforward = true;
         ctrl_c.constraint_aware = false;
         ctrl_c.reset();  // ensure integrator state is zero at trajectory start

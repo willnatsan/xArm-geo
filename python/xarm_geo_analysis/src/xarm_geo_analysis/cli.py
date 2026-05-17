@@ -131,6 +131,8 @@ def cmd_plot_trial(args: argparse.Namespace) -> None:
 
 
 def cmd_plot_compare(args: argparse.Namespace) -> None:
+    import numpy as np
+
     from xarm_geo_analysis.metrics.tracking import (
         riemannian_se3_error,
         rotational_geodesic_error,
@@ -144,22 +146,29 @@ def cmd_plot_compare(args: argparse.Namespace) -> None:
     joined = ",".join(sorted(t.name for t in exp))
     prefix = "compare_" + hashlib.sha1(joined.encode()).hexdigest()[:8]
 
+    # Unit-converted wrappers so compare plots match single-trial units (mm / deg).
+    def trans_mm(trial):
+        return translational_error(trial) * 1e3
+
+    def rot_deg(trial):
+        return np.degrees(rotational_geodesic_error(trial))
+
     figures: list[tuple[Figure, str]] = [
         (
             overlay(
                 exp,
-                translational_error,
-                ylabel="Translational error (m)",
-                title="Translational error comparison",
+                trans_mm,
+                ylabel="Translational Error (mm)",
+                title="Translational Error Comparison",
             ),
             f"{prefix}_translational",
         ),
         (
             overlay(
                 exp,
-                rotational_geodesic_error,
-                ylabel="Rotational error (rad)",
-                title="Rotational error comparison",
+                rot_deg,
+                ylabel="Rotational Error (deg)",
+                title="Rotational Error Comparison",
             ),
             f"{prefix}_rotational",
         ),
@@ -167,8 +176,8 @@ def cmd_plot_compare(args: argparse.Namespace) -> None:
             overlay(
                 exp,
                 riemannian_se3_error,
-                ylabel="Riemannian SE(3) error",
-                title="Riemannian error comparison",
+                ylabel="Riemannian SE(3) Error",
+                title="Riemannian SE(3) Error Comparison",
             ),
             f"{prefix}_riemannian",
         ),

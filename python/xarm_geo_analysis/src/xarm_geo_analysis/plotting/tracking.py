@@ -18,6 +18,23 @@ from xarm_geo_analysis.metrics.tracking import (
     translational_error,
 )
 from xarm_geo_analysis.metrics.transient import _BAND_RIEM, _BAND_ROT_RAD, _BAND_TRANS_M
+from xarm_geo_analysis.plotting.style import (
+    ALPHA_BAND_FILL,
+    ALPHA_PATH_MUTED,
+    ALPHA_PRIMARY,
+    COLOR_ACTUAL,
+    COLOR_BAND_OK,
+    COLOR_LIMIT,
+    COLOR_RIEM,
+    COLOR_ROT,
+    COLOR_TARGET,
+    COLOR_TRANS,
+    LW_PATH,
+    LW_PRIMARY,
+    LW_REFERENCE,
+    TITLE_SEP,
+    style_axes_3d,
+)
 from xarm_geo_analysis.trial import Trial
 
 # Axis-length for EE frame triads in the 3-D path plot (metres).
@@ -56,40 +73,42 @@ def plot_tracking_errors(
 
     fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True)
 
-    axes[0].plot(t, e_trans, color="steelblue", linewidth=1.0)
+    axes[0].plot(
+        t, e_trans, color=COLOR_TRANS, linewidth=LW_PRIMARY, alpha=ALPHA_PRIMARY
+    )
     axes[0].axhline(
         _BAND_TRANS_M * 1e3,
-        color="red",
+        color=COLOR_LIMIT,
         linestyle="--",
-        linewidth=0.8,
-        label="5 mm band",
+        linewidth=LW_REFERENCE,
+        label="5 mm Band",
     )
-    axes[0].set_ylabel("Trans. error (mm)")
-    axes[0].legend(fontsize=8)
-    axes[0].set_title(f"{trial.name} — Tracking Errors")
+    axes[0].set_ylabel("Translational Error (mm)")
+    axes[0].legend()
+    axes[0].set_title(f"{trial.name}{TITLE_SEP}Tracking Errors")
 
-    axes[1].plot(t, e_rot, color="darkorange", linewidth=1.0)
+    axes[1].plot(t, e_rot, color=COLOR_ROT, linewidth=LW_PRIMARY, alpha=ALPHA_PRIMARY)
     axes[1].axhline(
         math.degrees(_BAND_ROT_RAD),
-        color="red",
+        color=COLOR_LIMIT,
         linestyle="--",
-        linewidth=0.8,
-        label="1° band",
+        linewidth=LW_REFERENCE,
+        label="1° Band",
     )
-    axes[1].set_ylabel("Rot. error (deg)")
-    axes[1].legend(fontsize=8)
+    axes[1].set_ylabel("Rotational Error (deg)")
+    axes[1].legend()
 
-    axes[2].plot(t, e_riem, color="purple", linewidth=1.0)
+    axes[2].plot(t, e_riem, color=COLOR_RIEM, linewidth=LW_PRIMARY, alpha=ALPHA_PRIMARY)
     axes[2].axhline(
         _BAND_RIEM,
-        color="red",
+        color=COLOR_LIMIT,
         linestyle="--",
-        linewidth=0.8,
-        label=f"Riem. band ({_BAND_RIEM:.4f})",
+        linewidth=LW_REFERENCE,
+        label=f"Riemannian Band ({_BAND_RIEM:.4f})",
     )
-    axes[2].set_ylabel("Riemannian error")
+    axes[2].set_ylabel("Riemannian Error")
     axes[2].set_xlabel("Time (s)")
-    axes[2].legend(fontsize=8)
+    axes[2].legend()
 
     fig.tight_layout()
     return fig
@@ -129,40 +148,62 @@ def plot_settling(
     fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
 
     # Translational panel.
-    axes[0].plot(t, e_trans, color="steelblue", linewidth=1.0, label="Trans. error")
     band_mm = trans_band_m * 1e3
+    axes[0].plot(
+        t,
+        e_trans,
+        color=COLOR_TRANS,
+        linewidth=LW_PRIMARY,
+        alpha=ALPHA_PRIMARY,
+        label="Translational Error",
+    )
     axes[0].axhspan(
-        0, band_mm, alpha=0.15, color="green", label=f"±{band_mm:.1f} mm band"
+        0,
+        band_mm,
+        alpha=ALPHA_BAND_FILL,
+        color=COLOR_BAND_OK,
+        label=f"±{band_mm:.1f} mm Band",
     )
     if math.isfinite(st["trans_s"]):
         axes[0].axvline(
             st["trans_s"],
-            color="red",
+            color=COLOR_LIMIT,
             linestyle="--",
-            linewidth=1.0,
-            label=f"Settled {st['trans_s']:.2f} s",
+            linewidth=LW_REFERENCE,
+            label=f"Settled at {st['trans_s']:.2f} s",
         )
-    axes[0].set_ylabel("Trans. error (mm)")
-    axes[0].legend(fontsize=8)
-    axes[0].set_title(f"{trial.name} — Settling")
+    axes[0].set_ylabel("Translational Error (mm)")
+    axes[0].legend()
+    axes[0].set_title(f"{trial.name}{TITLE_SEP}Settling Response")
 
     # Rotational panel.
-    axes[1].plot(t, e_rot, color="darkorange", linewidth=1.0, label="Rot. error")
     band_deg = math.degrees(rot_band_rad)
+    axes[1].plot(
+        t,
+        e_rot,
+        color=COLOR_ROT,
+        linewidth=LW_PRIMARY,
+        alpha=ALPHA_PRIMARY,
+        label="Rotational Error",
+    )
     axes[1].axhspan(
-        0, band_deg, alpha=0.15, color="green", label=f"±{band_deg:.1f}° band"
+        0,
+        band_deg,
+        alpha=ALPHA_BAND_FILL,
+        color=COLOR_BAND_OK,
+        label=f"±{band_deg:.1f}° Band",
     )
     if math.isfinite(st["rot_s"]):
         axes[1].axvline(
             st["rot_s"],
-            color="red",
+            color=COLOR_LIMIT,
             linestyle="--",
-            linewidth=1.0,
-            label=f"Settled {st['rot_s']:.2f} s",
+            linewidth=LW_REFERENCE,
+            label=f"Settled at {st['rot_s']:.2f} s",
         )
-    axes[1].set_ylabel("Rot. error (deg)")
+    axes[1].set_ylabel("Rotational Error (deg)")
     axes[1].set_xlabel("Time (s)")
-    axes[1].legend(fontsize=8)
+    axes[1].legend()
 
     fig.tight_layout()
     return fig
@@ -179,7 +220,7 @@ def plot_3d_path(
     axis_length: float = _TRIAD_LENGTH,
     figsize: tuple[float, float] = (10, 8),
 ) -> Figure:
-    """3-D scatter of actual vs target EE path with orientation triads.
+    """3-D line plot of actual vs target EE path with orientation triads.
 
     Rotations are read from quaternion columns — no Euler-angle conversion.
 
@@ -205,19 +246,19 @@ def plot_3d_path(
         p_target[:, 0],
         p_target[:, 1],
         p_target[:, 2],
-        color="gray",
-        alpha=0.5,
-        linewidth=1.5,
-        label="Target path",
+        color=COLOR_TARGET,
+        alpha=ALPHA_PATH_MUTED,
+        linewidth=LW_PATH,
+        label="Target Path",
     )
     ax.plot(
         p_actual[:, 0],
         p_actual[:, 1],
         p_actual[:, 2],
-        color="black",
-        alpha=0.4,
-        linewidth=1.0,
-        label="Actual path",
+        color=COLOR_ACTUAL,
+        alpha=ALPHA_PATH_MUTED,
+        linewidth=LW_PATH,
+        label="Actual Path",
     )
 
     # Draw orientation triads at every triad_step sample.
@@ -235,7 +276,7 @@ def plot_3d_path(
                 arrow_length_ratio=0.3,
             )
 
-    # Dummy legend entries for axis colours.
+    # Dummy legend entries for triad axis colours.
     ax.plot([], [], color="r", label="Local X")
     ax.plot([], [], color="g", label="Local Y")
     ax.plot([], [], color="b", label="Local Z")
@@ -243,8 +284,10 @@ def plot_3d_path(
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Y (m)")
     ax.set_zlabel("Z (m)")
-    ax.set_title(f"{trial.name} — EE Path")
-    ax.legend(fontsize=8)
+    ax.set_title(f"{trial.name}{TITLE_SEP}End-Effector Path")
+    ax.legend()
+
+    style_axes_3d(ax)
 
     # Equal aspect ratio.
     all_pts = np.vstack([p_actual, p_target])

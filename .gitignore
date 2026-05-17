@@ -7,7 +7,7 @@
 # Ignore `compile_commands.json` (Contains Absolute Paths)
 compile_commands.json
 
-# Ignore generated MJCF XML & URDF Files (Contains Absolute Paths)
+# Ignore Generated MJCF XML & URDF Files (Contains Absolute Paths)
 assets/urdf/_compiled/*.urdf
 assets/mjcf/*.xml
 
@@ -15,8 +15,12 @@ assets/mjcf/*.xml
 !assets/mjcf/*_scene.xml
 !assets/mjcf/*_extension.xml
 
-# Ignore validation / simulation log and CSV outputs
+# Ignore Validation / Experiment Log and CSV outputs
 tests/results/
+
+# Ignore Python Bytecode and Cache Directories
+__pycache__/
+*.pyc
 
 # pixi environments
 .pixi/*

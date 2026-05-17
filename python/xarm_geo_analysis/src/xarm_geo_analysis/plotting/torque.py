@@ -2,7 +2,7 @@
 Torque-triplet and velocity-triplet overlay plots.
 
 Each plot shows ctrl / des / safe overlaid for one or all joints, with
-joint limits as shaded bands and ASIF / OptIK activation marked as ticks.
+joint limits as shaded bands and ASIF / OptIK activation as shaded intervals.
 """
 
 from __future__ import annotations
@@ -11,6 +11,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
+from xarm_geo_analysis.plotting.style import (
+    ALPHA_BAND_FILL,
+    ALPHA_OVERLAY,
+    ALPHA_PRIMARY,
+    ALPHA_SECONDARY,
+    COLOR_CTRL,
+    COLOR_DES,
+    COLOR_LIMIT,
+    COLOR_SAFE,
+    LW_PRIMARY,
+    LW_SECONDARY,
+    TITLE_SEP,
+)
 from xarm_geo_analysis.trial import Trial
 
 
@@ -55,47 +68,55 @@ def plot_torque_triplet(
         ax.plot(
             t,
             tau_ctrl[:, j],
-            color="steelblue",
-            linewidth=0.8,
-            label="tau_ctrl",
-            alpha=0.7,
+            color=COLOR_CTRL,
+            linewidth=LW_SECONDARY,
+            alpha=ALPHA_SECONDARY,
+            label="Controlled Torque",
         )
         ax.plot(
             t,
             tau_des[:, j],
-            color="darkorange",
-            linewidth=0.8,
-            label="tau_des",
-            alpha=0.7,
+            color=COLOR_DES,
+            linewidth=LW_SECONDARY,
+            alpha=ALPHA_SECONDARY,
+            linestyle="--",
+            label="Desired Torque",
         )
-        ax.plot(t, tau_safe[:, j], color="green", linewidth=1.0, label="tau_safe")
+        ax.plot(
+            t,
+            tau_safe[:, j],
+            color=COLOR_SAFE,
+            linewidth=LW_PRIMARY,
+            alpha=ALPHA_PRIMARY,
+            label="Safe Torque",
+        )
 
         # Joint torque limit band.
         if tau_max is not None and np.isfinite(tau_max[j]):
             ax.axhspan(
                 -tau_max[j],
                 tau_max[j],
-                alpha=0.07,
-                color="red",
-                label=f"±tau_max ({tau_max[j]:.1f} Nm)",
+                alpha=ALPHA_BAND_FILL,
+                color=COLOR_LIMIT,
+                label=f"±Torque Limit ({tau_max[j]:.1f} Nm)",
             )
 
-        # Vertical ticks where ASIF modified the command.
+        # Shade intervals where ASIF modified the command.
         ax.fill_between(
             t,
             ax.get_ylim()[0],
             ax.get_ylim()[1],
             where=asif_mod,
-            color="red",
-            alpha=0.12,
-            label="ASIF active",
+            color=COLOR_LIMIT,
+            alpha=ALPHA_OVERLAY,
+            label="ASIF Active",
         )
 
-        ax.set_ylabel(f"Joint {j} (Nm)")
-        ax.legend(fontsize=7, loc="upper right")
+        ax.set_ylabel(f"Joint {j} Torque (Nm)")
+        ax.legend()
 
     axes_list[-1].set_xlabel("Time (s)")
-    axes_list[0].set_title(f"{trial.name} — Torque Triplet")
+    axes_list[0].set_title(f"{trial.name}{TITLE_SEP}Torque Triplet")
     fig.tight_layout()
     return fig
 
@@ -139,20 +160,38 @@ def plot_velocity_triplet(
 
     for ax, j in zip(axes_list, joints):
         ax.plot(
-            t, v_ctrl[:, j], color="steelblue", linewidth=0.8, label="v_ctrl", alpha=0.7
+            t,
+            v_ctrl[:, j],
+            color=COLOR_CTRL,
+            linewidth=LW_SECONDARY,
+            alpha=ALPHA_SECONDARY,
+            label="Controlled Velocity",
         )
         ax.plot(
-            t, v_des[:, j], color="darkorange", linewidth=0.8, label="v_des", alpha=0.7
+            t,
+            v_des[:, j],
+            color=COLOR_DES,
+            linewidth=LW_SECONDARY,
+            alpha=ALPHA_SECONDARY,
+            linestyle="--",
+            label="Desired Velocity",
         )
-        ax.plot(t, v_safe[:, j], color="green", linewidth=1.0, label="v_safe")
+        ax.plot(
+            t,
+            v_safe[:, j],
+            color=COLOR_SAFE,
+            linewidth=LW_PRIMARY,
+            alpha=ALPHA_PRIMARY,
+            label="Safe Velocity",
+        )
 
         if v_max is not None and np.isfinite(v_max[j]):
             ax.axhspan(
                 -v_max[j],
                 v_max[j],
-                alpha=0.07,
-                color="red",
-                label=f"±v_max ({v_max[j]:.2f} rad/s)",
+                alpha=ALPHA_BAND_FILL,
+                color=COLOR_LIMIT,
+                label=f"±Velocity Limit ({v_max[j]:.2f} rad/s)",
             )
 
         ax.fill_between(
@@ -160,15 +199,15 @@ def plot_velocity_triplet(
             ax.get_ylim()[0],
             ax.get_ylim()[1],
             where=optik_mod,
-            color="red",
-            alpha=0.12,
-            label="OptIK/rescale active",
+            color=COLOR_LIMIT,
+            alpha=ALPHA_OVERLAY,
+            label="OptIK / Rescale Active",
         )
 
-        ax.set_ylabel(f"Joint {j} (rad/s)")
-        ax.legend(fontsize=7, loc="upper right")
+        ax.set_ylabel(f"Joint {j} Velocity (rad/s)")
+        ax.legend()
 
     axes_list[-1].set_xlabel("Time (s)")
-    axes_list[0].set_title(f"{trial.name} — Velocity Triplet")
+    axes_list[0].set_title(f"{trial.name}{TITLE_SEP}Velocity Triplet")
     fig.tight_layout()
     return fig

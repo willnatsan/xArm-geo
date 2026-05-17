@@ -22,7 +22,7 @@ namespace xarm_geo {
     // Solved with ProxQP; M^-1 is factorised once and reused across barriers.
     // asif_validate() forward-simulates one step to catch QP linearisation errors.
 
-    // --- Default Gains for the Convenience Overload ---
+    // --- ASIF Defaults ---
     //
     // Shared by asif_filter (convenience overload in asif.cpp) and the dynamic
     // controller bases (controller.cpp) so the defaults stay in one place.
@@ -31,6 +31,10 @@ namespace xarm_geo {
         inline constexpr double kBarrierAlpha0 = 25.0;
         inline constexpr double kBarrierAlpha1 = 10.0;
         inline constexpr double kCollisionActivationDistance = 0.05;
+
+        // Threshold on ||tau_safe - tau_des||_2 above which asif_modified is set.
+        // Sized just above the QP solver's per-element numerical noise floor.
+        inline constexpr double kModifiedTol = 1e-3;
     }  // namespace asif_defaults
 
     // --- ASIF Status & Options ---

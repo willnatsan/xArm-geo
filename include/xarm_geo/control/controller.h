@@ -231,11 +231,9 @@ namespace xarm_geo {
         // velocity-limit rescaling. Conflating these under one schema keeps the Python
         // side uniform -- revisit if a third kinematic safety layer is ever added.
         OptimalIKStatus optik_status = OptimalIKStatus::OK;
-        bool optik_invoked =
-            false;  // true only for KinematicTaskControllerBase with constraint_aware
-        bool optik_modified =
-            false;                 // ||v_safe - v_des|| > eps (or rescale clipped for joint base)
-        double optik_delta = 0.0;  // slack magnitude from last QP solve (0 when strict)
+        bool optik_invoked = false;   // true only when constraint_aware
+        bool optik_modified = false;  // ||v_safe - v_des||_2 > optik_defaults::kModifiedTol
+        double optik_delta = 0.0;     // slack magnitude from last QP solve (0 when strict)
     };
 
     // Dynamic bases (torque triplet).
@@ -246,7 +244,7 @@ namespace xarm_geo {
 
         ASIFStatus asif_status = ASIFStatus::OK;
         bool asif_invoked = false;   // true only when constraint_aware
-        bool asif_modified = false;  // ||tau_safe - tau_des|| > eps
+        bool asif_modified = false;  // ||tau_safe - tau_des||_2 > asif_defaults::kModifiedTol
         double asif_delta = 0.0;     // slack magnitude from last QP solve (0 when strict)
     };
 

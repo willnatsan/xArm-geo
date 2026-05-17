@@ -1,6 +1,6 @@
 // --- Experiment 3A: Smooth Complex Trajectory (Simulation + Hardware) ---
 //
-// Four variants of TiltingCircle tracking spanning two interfaces (sim / hw)
+// Five variants of TiltingCircle tracking spanning two interfaces (sim / hw)
 // and two control modalities (velocity / torque).  The goal is to compare
 // simulation and hardware behaviour for the same controller, and to show the
 // effect of the admittance layer that bridges a torque-mode controller to the
@@ -12,24 +12,26 @@
 //   B) Simulation,  torque mode:    GeometricPDController (ASIF off)
 //   C) Hardware,    velocity mode:  GeometricPController  (OptIK on)
 //   D) Hardware,    velocity mode + admittance:
-//                   GeometricPDController (torque) -> AdmittanceLayer -> write(v)
-//                   (ASIF on the PD controller; admittance translates tau to v)
+//                   GeometricPDController (torque) -> AdmittanceLayer -> safe_velocity_projection
+//   E) Simulation,  velocity mode + admittance:
+//                   GeometricPDController (torque) -> AdmittanceLayer -> safe_velocity_projection
+//                   Sim-domain analogue of Variant D; useful for offline tuning.
 //
-// Simulation variants (A, B) run by default.  Hardware variants (C, D) require
-// the --hw <ip> flag and BUILD_WITH_REAL_XARM.
+// Simulation variants (A, B) run by default.  E is opt-in (--variants E).
+// Hardware variants (C, D) require --hw <ip> and BUILD_WITH_REAL_XARM.
 //
-// Admittance (Variant D)
-// ----------------------
-// The xArm SDK only accepts JointVelocity commands.  GeometricPDController
-// outputs JointTorque.  AdmittanceLayer maps:
-//   v = D_v^{-1} * tau
-// followed by a direction-preserving rescale to satisfy |v_i| <= v_max_i.
-// Per-joint damping D_v defaults to 5 N.m.s/rad; tunable via --damping.
+// Admittance (Variants D, E)
+// --------------------------
+// AdmittanceLayer implements a 1st-order ODE  M_v v_dot + D_v v = tau  with a
+// velocity feedforward port that bypasses the low-pass for trajectory tracking.
+// M_v = diag(M(q_start)) * mass_scale, D_v = cutoff * M_v.
+// Tunable via --cutoff (rad/s, default 30) and --mass-scale (default 1.0).
 //
 // Usage
 // -----
 //   ./build/exp_3a_sim_hw [--log true] [--variants AB]
-//   ./build/exp_3a_sim_hw --hw <ip> [--log true] [--variants CD] [--damping <d>]
+//   ./build/exp_3a_sim_hw [--log true] [--variants E] [--cutoff <w>] [--mass-scale <s>]
+//   ./build/exp_3a_sim_hw --hw <ip> [--log true] [--variants CD] [--cutoff <w>] [--mass-scale <s>]
 //
 // Analysis
 // --------
@@ -61,6 +63,7 @@
 #include <xarm_geo/modelling/optimal_kinematics.h>
 #include <xarm_geo/trajectory/adapters.h>
 #include <xarm_geo/trajectory/validate.h>
+#include <xarm_geo/utils/debug.h>
 #include <xarm_geo/utils/model_builder.h>
 
 #ifdef XARM_GEO_HAS_REAL_XARM
@@ -85,19 +88,17 @@ namespace {
     constexpr double kKdLin = 280.0;
     constexpr double kKdAng = 2.4;
 
-    // Hardware torque-mode gains for Variant D (admittance layer).
-    // The admittance map converts tau -> v = tau / D_v, so the effective
-    // position stiffness seen by the arm is kp / D_v (rad/s per unit error).
-    // The sim gains above would give ~800 (m/s)/m with D_v = 5, saturating
-    // q_vel_max constantly.  These are 10x lower to keep velocities well within
-    // the URDF limit of pi rad/s under typical tracking errors.
-    // Scale kd proportionally (kd ~= 2*sqrt(kp) ratio preserved) to maintain
-    // approximate critical damping through the admittance loop.
-    // Tune D_v (--damping flag) and these gains together on hardware.
-    constexpr double kKpPosHw = 400.0;
-    constexpr double kKpRotHw = 6.0;
-    constexpr double kKdLinHw = 28.0;
-    constexpr double kKdAngHw = 0.24;
+    // Hardware gains for Variant D (admittance layer).
+    // The stateful admittance provides its own low-pass filtering, so these can
+    // be set at the same scale as the simulation torque gains (kKpPos / kKpRot).
+    // The feedforward velocity bypass means trajectory tracking does not rely
+    // solely on the P term, so kd can be tuned independently for damping.
+    // Starting point: same as simulation. Raise if steady-state error is large;
+    // lower if oscillation persists after tuning the admittance cutoff.
+    constexpr double kKpPosHw = 4000.0;
+    constexpr double kKpRotHw = 60.0;
+    constexpr double kKdLinHw = 280.0;
+    constexpr double kKdAngHw = 2.4;
 
     // Kinematic-mode gains.
     constexpr double kKpPosKin = 8.0;
@@ -337,6 +338,180 @@ namespace {
         return true;
     }
 
+    // -------------------------------------------------------------------------
+    // Variant E: sim, velocity mode, GeometricPDController + AdmittanceLayer
+    // -------------------------------------------------------------------------
+    // Sim-domain analogue of Variant D.  The simulation runs in velocity mode
+    // so the inner actuator servo dynamics are present, mirroring the hardware
+    // cascade.  Useful for tuning --cutoff and --mass-scale offline.
+    //
+    // Key difference from Variant D: bias_compensation = Full because the sim
+    // does not apply internal gravity compensation (unlike the xArm SDK).
+
+    auto run_variant_E(Simulation &sim, const Model &model, Data &data, CollisionModel &col_model,
+                       CollisionData &col_data, const Eigen::VectorXd &q_home, bool log_data,
+                       double admittance_cutoff, double admittance_mass_scale) -> bool {
+
+        trajectories::TiltingCircle circle_inner(make_anchor_pose(q_home), kCircleBaseDuration);
+        TimeScaledTask traj{std::move(circle_inner), kHalfSpeed};
+
+        TaskTarget start_target;
+        if (traj.evaluate(0.0, start_target) != TrajectoryStatus::OK) { return false; }
+        if (!optimal_inverse_kinematics(model, data, col_model, col_data, q_home,
+                                        start_target.pose)) {
+            std::cerr << "[3A-E] IK failed.\n";
+            return false;
+        }
+        const Eigen::VectorXd q_start = data.q_out;
+
+        controllers::JointPController joint_ctrl(model);
+        joint_ctrl.kp.setConstant(5.0);
+        joint_ctrl.use_feedforward = true;
+
+        JointState state(model.dof);
+        JointVelocity vel(model.dof);
+        JointTorque tau(model.dof);
+        if (sim.read(state) != InterfaceStatus::OK) { return false; }
+
+        std::cout << "  [Phase 1] Approaching start...\n";
+        trajectories::JointPTP approach(q_home, q_start, kPhaseDuration);
+        if (!run_joint_ptp_sim(sim, model, data, joint_ctrl, approach, state, vel)) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+        // Sim stays in VELOCITY mode throughout (mirrors hardware mode 4).
+
+        // --- Torque controller (no ASIF; bias_compensation = Full for sim). ---
+        controllers::GeometricPDController ctrl(model);
+        ctrl.gains.kp_pos.setConstant(kKpPosHw);
+        ctrl.gains.kp_rot.setConstant(kKpRotHw);
+        ctrl.gains.kd_lin.setConstant(kKdLinHw);
+        ctrl.gains.kd_ang.setConstant(kKdAngHw);
+        ctrl.use_feedforward = true;
+        ctrl.constraint_aware = false;
+        // Sim has no internal gravity compensation; inject h(q,v) here.
+        ctrl.bias_compensation = BiasCompensation::Full;
+
+        // --- Admittance layer: same sizing as Variant D. ---
+        AdmittanceOptions adm_opts;
+        adm_opts.mass_diag = make_inertia_diag(model, data, q_start) * admittance_mass_scale;
+        adm_opts.damping_diag = adm_opts.mass_diag * admittance_cutoff;
+        AdmittanceLayer admittance(model.dof, adm_opts);
+
+        if (sim.read(state) != InterfaceStatus::OK) { return false; }
+        admittance.seed_from(state.v);
+
+        OptimalIKOptions proj_opts;
+        proj_opts.dt = kSimulationControlPeriodS;
+
+        Eigen::VectorXd v_ff(model.dof);
+        Eigen::VectorXd v_projected(model.dof);
+
+        const std::string trial_name = diagnostics::make_trial_name(
+            "sim", controllers::GeometricPDController::kName, trajectories::TiltingCircle::kName,
+            /*constraint=*/true, ctrl.use_feedforward,
+            /*suffix=*/"admittance");
+        auto logger = make_logger("3a", model, trial_name, log_data);
+
+        const double traj_dur = traj.duration();
+        const double physics_dt = kSimulationPhysicsPeriodS;
+        double render_dt = 1.0 / 60.0;
+        double last_render_t = 0.0;
+        const auto ctrl_dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::duration<double>(kSimulationControlPeriodS));
+
+        PerfStats perf;
+        perf.reserve(static_cast<std::size_t>(traj_dur / (kSafetyDecimationFactor * physics_dt)) +
+                     32);
+
+        double t = 0.0;
+        std::int64_t tick = 0;
+        TaskTarget task_target;
+
+        std::cout << "  [Phase 2] GeometricPDController + AdmittanceLayer (sim, velocity)...\n";
+        while (t < traj_dur && sim.is_running()) {
+            const auto step_start = std::chrono::steady_clock::now();
+            if (sim.read(state) != InterfaceStatus::OK) { break; }
+
+            if (tick % kSafetyDecimationFactor == 0) {
+                if (traj.evaluate(t, task_target) != TrajectoryStatus::OK) { break; }
+                const TaskControllerContext ctx{state, task_target, ctrl_dt_ns};
+                const auto t0 = std::chrono::steady_clock::now();
+
+                // 1. Torque PD. compute_jacobians runs inside ctrl.update.
+                const ControllerStatus cs = ctrl.update(model, data, ctx, tau);
+                if (cs != ControllerStatus::OK) { break; }
+
+                // 2. Velocity feedforward: DLS-IDK of Ad_{g_e} * xi_d.
+                {
+                    const manifold::SE3 g_e = data.ee_pose.inverse() * task_target.pose;
+                    inverse_diff_kinematics(model, data, g_e.Ad() * task_target.twist);
+                    v_ff = data.v_out;
+                }
+
+                // 3. Admittance step.
+                admittance.apply(model, state.q, tau, v_ff, ctrl_dt_ns, vel);
+
+                // 4. Kinematic safety projection.
+                const OptimalIKStatus proj_status = safe_velocity_projection(
+                    model, data, col_model, col_data, vel.v, v_projected, proj_opts);
+                if (proj_status == OptimalIKStatus::OK || proj_status == OptimalIKStatus::RELAXED) {
+                    vel.v = v_projected;
+                } else {
+                    debug::log("safe_velocity_projection failed; using admittance output directly");
+                }
+
+                perf.record(t0, std::chrono::steady_clock::now());
+                if (sim.write(vel) != InterfaceStatus::OK) { break; }
+
+                if (logger) {
+                    diagnostics::LogSample s;
+                    diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
+                    s.controller_status = static_cast<std::uint8_t>(cs);
+                    diagnostics::fill_torque_diagnostics(s, ctrl);
+                    diagnostics::fill_admittance_diagnostics(s, admittance);
+                    if (proj_status == OptimalIKStatus::OK ||
+                        proj_status == OptimalIKStatus::RELAXED) {
+                        s.v_safe = v_projected;
+                    }
+                    s.optik_invoked = true;
+                    s.optik_modified =
+                        (proj_status == OptimalIKStatus::OK ||
+                         proj_status == OptimalIKStatus::RELAXED) &&
+                        (v_projected - admittance.last_tick_diagnostics().v_safe).norm() >
+                            optik_defaults::kModifiedTol;
+                    s.optik_status = static_cast<std::uint8_t>(proj_status);
+                    logger->log(s);
+                }
+            }
+
+            sim.step();
+            t += physics_dt;
+            ++tick;
+
+            if (t - last_render_t >= render_dt) {
+                sim.set_marker(task_target.pose);
+                sim.update_scene();
+                sim.render();
+                last_render_t = t;
+            }
+            std::this_thread::sleep_until(step_start + std::chrono::duration<double>(physics_dt));
+        }
+        logger.reset();
+        perf.report("[3A-E] GeometricPDController + AdmittanceLayer (sim, velocity)");
+
+        std::cout << "  [Phase 3] Returning home...\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        if (sim.read(state) != InterfaceStatus::OK) { return false; }
+        trajectories::JointPTP ret(state.q, q_home, kPhaseDuration);
+        if (!run_joint_ptp_sim(sim, model, data, joint_ctrl, ret, state, vel)) { return false; }
+        if (log_data) {
+            std::cout << "  -> Logged: tests/results/exp_3a/" << trial_name << ".csv\n";
+        }
+        return true;
+    }
+
 #ifdef XARM_GEO_HAS_REAL_XARM
 
     // -------------------------------------------------------------------------
@@ -443,15 +618,24 @@ namespace {
     // -------------------------------------------------------------------------
     // Variant D: hardware, velocity mode, GeometricPDController + AdmittanceLayer
     // -------------------------------------------------------------------------
-    // GeometricPDController outputs JointTorque; AdmittanceLayer translates it
-    // to JointVelocity via  v = D_v^{-1} * tau  followed by a direction-
-    // preserving velocity-limit rescale.  The PD controller also has
-    // constraint_aware = true so ASIF certifies the torque command *before* the
-    // admittance translation.
+    // Cascade:
+    //   1. GeometricPDController (torque, constraint_aware=false; see
+    //      docs/admittance_and_safety.md for why ASIF does not transfer through
+    //      the admittance onto a velocity-mode interface).
+    //   2. AdmittanceLayer (1st-order ODE: M_v v_dot + D_v v = tau) with a
+    //      velocity feedforward v_ff = DLS-IDK(Ad_{g_e} * xi_d) that bypasses
+    //      the low-pass so moving targets are tracked without phase lag.
+    //   3. safe_velocity_projection: projects the admittance output to the
+    //      nearest joint velocity satisfying hard position/velocity limits and
+    //      soft self-collision avoidance (kinematic CBFs via OptIK QP).
+    //
+    // Admittance sizing: M_v = diag(M(q_start)) * mass_scale, D_v = cutoff * M_v.
+    // Default cutoff 30 rad/s (~5 Hz) is well below the inner-servo bandwidth.
+    // Tunable via --cutoff <rad/s> (break frequency) and --mass-scale <s> (M_v multiplier).
 
     auto run_variant_D(Hardware &hw, const Model &model, Data &data, CollisionModel &col_model,
                        CollisionData &col_data, const Eigen::VectorXd &q_home, bool log_data,
-                       double admittance_damping) -> bool {
+                       double admittance_cutoff, double admittance_mass_scale) -> bool {
 
         trajectories::TiltingCircle circle_inner(make_anchor_pose(q_home), kCircleBaseDuration);
         TimeScaledTask traj{std::move(circle_inner), kHalfSpeed};
@@ -483,25 +667,39 @@ namespace {
         trajectories::JointPTP a_traj(q_home, q_start, kPhaseDuration);
         if (!run_joint_ptp_hw(hw, model, data, joint_ctrl, a_traj, state, vel)) { return false; }
 
+        // --- Torque controller (no ASIF: its torque constraints don't transfer
+        //     through the admittance onto the velocity-mode SDK servo). ---
         controllers::GeometricPDController ctrl(model);
         ctrl.gains.kp_pos.setConstant(kKpPosHw);
         ctrl.gains.kp_rot.setConstant(kKpRotHw);
         ctrl.gains.kd_lin.setConstant(kKdLinHw);
         ctrl.gains.kd_ang.setConstant(kKdAngHw);
         ctrl.use_feedforward = true;
-        ctrl.constraint_aware = true;
-        // On hardware the xArm SDK applies internal gravity compensation, so we
-        // must not add g(q) or h(q,v) again here.  Full would double-count gravity
-        // and cause the arm to drift at rest (non-zero tau -> non-zero v via
-        // admittance even with zero pose error).
+        ctrl.constraint_aware = false;
+        // xArm SDK applies gravity compensation internally; do not double-count.
         ctrl.bias_compensation = BiasCompensation::None;
-        ctrl.attach_collision(col_model, col_data);
 
-        AdmittanceLayer admittance(model.dof, admittance_damping);
+        // --- Admittance layer: M_v from robot inertia, D_v = cutoff * M_v. ---
+        AdmittanceOptions adm_opts;
+        adm_opts.mass_diag = make_inertia_diag(model, data, q_start) * admittance_mass_scale;
+        adm_opts.damping_diag = adm_opts.mass_diag * admittance_cutoff;
+        AdmittanceLayer admittance(model.dof, adm_opts);
+
+        // Seed from the arm's current velocity so the first tick has no step.
+        hw.read(state);
+        admittance.seed_from(state.v);
+
+        // --- Kinematic safety filter options (dt must match control period). ---
+        OptimalIKOptions proj_opts;
+        proj_opts.dt = kHardwareControlPeriodS;
+
+        // Pre-allocated scratch.
+        Eigen::VectorXd v_ff(model.dof);
+        Eigen::VectorXd v_projected(model.dof);
 
         const std::string trial_name = diagnostics::make_trial_name(
             "hardware", controllers::GeometricPDController::kName,
-            trajectories::TiltingCircle::kName, ctrl.constraint_aware, ctrl.use_feedforward,
+            trajectories::TiltingCircle::kName, /*constraint=*/true, ctrl.use_feedforward,
             /*suffix=*/"admittance");
         auto logger = make_logger("3a", model, trial_name, log_data);
 
@@ -518,18 +716,38 @@ namespace {
             if (traj.evaluate(t, task_target) != TrajectoryStatus::OK) { break; }
 
             const TaskControllerContext ctx{state, task_target, dt_ns};
+
+            // 1. Torque PD. compute_jacobians runs inside ctrl.update.
             const ControllerStatus cs = ctrl.update(model, data, ctx, tau);
             if (cs != ControllerStatus::OK) {
                 std::cerr << "[3A-D] PD controller failed.\n";
                 return false;
             }
 
-            // Translate ASIF-certified tau -> velocity via admittance map.
-            // tau (JointTorque) already holds the ASIF-certified command because
-            // DynamicTaskControllerBase writes tau_safe into out.tau when
-            // constraint_aware = true.  Use the model-aware overload to also
-            // enforce |v_i| <= v_max_i via direction-preserving rescale.
-            admittance.apply(model, tau, vel);
+            // 2. Velocity feedforward: DLS-IDK of Ad_{g_e} * xi_d.
+            //    Bypasses the admittance low-pass so trajectory tracking does
+            //    not incur phase lag through the filter.
+            {
+                const manifold::SE3 g_e = data.ee_pose.inverse() * task_target.pose;
+                inverse_diff_kinematics(model, data, g_e.Ad() * task_target.twist);
+                v_ff = data.v_out;
+            }
+
+            // 3. Admittance step (stateful 1st-order ODE + FF bypass + rescale).
+            admittance.apply(model, state.q, tau, v_ff, dt_ns, vel);
+
+            // 4. Kinematic safety projection: hard position/velocity limits +
+            //    soft self-collision avoidance via kinematic CBF QP.
+            //    compute_jacobians was already called inside ctrl.update above.
+            const OptimalIKStatus proj_status = safe_velocity_projection(
+                model, data, col_model, col_data, vel.v, v_projected, proj_opts);
+            if (proj_status == OptimalIKStatus::INFEASIBLE ||
+                proj_status == OptimalIKStatus::ERROR) {
+                debug::log("safe_velocity_projection failed; using admittance output directly");
+                // Admittance output already velocity-limit rescaled; use as fallback.
+            } else {
+                vel.v = v_projected;
+            }
 
             if (hw.write(vel) != InterfaceStatus::OK) { return false; }
 
@@ -537,17 +755,22 @@ namespace {
                 diagnostics::LogSample s;
                 diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
                 s.controller_status = static_cast<std::uint8_t>(cs);
-                // Torque triplet from the PD controller (with ASIF diagnostics).
+                // Torque triplet (tau_ctrl, tau_des, tau_safe) from the PD controller.
                 diagnostics::fill_torque_diagnostics(s, ctrl);
-                // Also log the admittance-derived velocity that was actually sent to
-                // the hardware.  All three triplet entries are the same value because
-                // AdmittanceLayer::apply(model, ...) combines the raw map and the
-                // direction-preserving velocity-limit rescale in one step with no
-                // separately observable intermediate.  The Python analysis suite will
-                // read these under the v_ctrl / v_des / v_safe column group.
-                s.v_ctrl = vel.v;
-                s.v_des = vel.v;
-                s.v_safe = vel.v;
+                // Velocity triplet from admittance: v_ctrl=v_state, v_des=v_state+v_ff,
+                // v_safe=post-rescale. v_safe is overwritten below if projection ran.
+                diagnostics::fill_admittance_diagnostics(s, admittance);
+                // If projection succeeded, update v_safe to reflect the projected value.
+                if (proj_status == OptimalIKStatus::OK || proj_status == OptimalIKStatus::RELAXED) {
+                    s.v_safe = v_projected;
+                }
+                s.optik_invoked = true;
+                s.optik_modified =
+                    (proj_status == OptimalIKStatus::OK ||
+                     proj_status == OptimalIKStatus::RELAXED) &&
+                    (v_projected - admittance.last_tick_diagnostics().v_safe).norm() >
+                        optik_defaults::kModifiedTol;
+                s.optik_status = static_cast<std::uint8_t>(proj_status);
                 logger->log(s);
             }
 
@@ -582,7 +805,10 @@ auto main(int argc, char *argv[]) -> int {
     bool log_data = false;
     std::string variants_str;  // auto-set below based on --hw presence
     std::string robot_ip;
-    double admittance_damping = 5.0;  // N.m.s/rad, conservative default
+    // Admittance cutoff frequency (rad/s).  D_v = cutoff * M_v(q_start).
+    double admittance_cutoff = 30.0;
+    // Uniform scale on M_v; 1.0 = robot inertia.  Raise to slow the filter.
+    double admittance_mass_scale = 1.0;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -593,20 +819,26 @@ auto main(int argc, char *argv[]) -> int {
             variants_str = argv[++i];
         } else if (arg == "--hw" && i + 1 < argc) {
             robot_ip = argv[++i];
-        } else if (arg == "--damping" && i + 1 < argc) {
-            admittance_damping = std::stod(argv[++i]);
+        } else if (arg == "--cutoff" && i + 1 < argc) {
+            admittance_cutoff = std::stod(argv[++i]);
+        } else if (arg == "--mass-scale" && i + 1 < argc) {
+            admittance_mass_scale = std::stod(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "Usage: " << argv[0] << " [options]\n"
                 << "Options:\n"
                 << "  --log <false|true>     Log data to CSV (default: false)\n"
-                << "  --variants <ABCD>      Variants to run\n"
+                << "  --variants <ABCDE>     Variants to run\n"
                 << "                           A = Sim,  velocity, GeometricP\n"
                 << "                           B = Sim,  torque,   GeometricPD\n"
                 << "                           C = Hw,   velocity, GeometricP + OptIK\n"
                 << "                           D = Hw,   velocity, GeometricPD + Admittance\n"
+                << "                           E = Sim,  velocity, GeometricPD + Admittance\n"
                 << "  --hw <ip>              Robot IP for hardware variants\n"
-                << "  --damping <d>          Admittance damping D_v (N.m.s/rad, default: 5.0)\n";
+                << "  --cutoff <w>           Admittance break frequency (rad/s, default: 30.0)\n"
+                << "                           D_v = cutoff * M_v(q_start)  [variants D, E]\n"
+                << "  --mass-scale <s>       Uniform scale on M_v (default: 1.0)  [variants D, "
+                   "E]\n";
             return 0;
         }
     }
@@ -651,9 +883,10 @@ auto main(int argc, char *argv[]) -> int {
               << "Variants: " << variants_str << "\n"
               << "Log data: " << (log_data ? "yes" : "no") << "\n\n";
 
-    // ---- Simulation variants (A, B) ----------------------------------------
-    const bool want_sim =
-        variants_str.find('A') != std::string::npos || variants_str.find('B') != std::string::npos;
+    // ---- Simulation variants (A, B, E) -------------------------------------
+    const bool want_sim = variants_str.find('A') != std::string::npos ||
+                          variants_str.find('B') != std::string::npos ||
+                          variants_str.find('E') != std::string::npos;
 
     if (want_sim) {
         Simulation sim(model);
@@ -681,6 +914,19 @@ auto main(int argc, char *argv[]) -> int {
                 return 1;
             }
             std::cout << "--- Variant B complete. ---\n\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+
+        if (variants_str.find('E') != std::string::npos) {
+            std::cout << "--- Variant E: GeometricPDController + Admittance (sim, velocity) ---\n"
+                      << "  cutoff = " << admittance_cutoff << " rad/s"
+                      << "  mass_scale = " << admittance_mass_scale << "\n";
+            if (!run_variant_E(sim, model, data, col_model, col_data, q_home, log_data,
+                               admittance_cutoff, admittance_mass_scale)) {
+                std::cerr << "[3A] Variant E failed.\n";
+                return 1;
+            }
+            std::cout << "--- Variant E complete. ---\n\n";
         }
 
         sim.shutdown();
@@ -713,9 +959,10 @@ auto main(int argc, char *argv[]) -> int {
 
         if (variants_str.find('D') != std::string::npos) {
             std::cout << "--- Variant D: GeometricPDController + Admittance (hw) ---\n"
-                      << "  Admittance damping D_v = " << admittance_damping << " N.m.s/rad\n";
+                      << "  cutoff = " << admittance_cutoff << " rad/s"
+                      << "  mass_scale = " << admittance_mass_scale << "\n";
             if (!run_variant_D(hw, model, data, col_model, col_data, q_home, log_data,
-                               admittance_damping)) {
+                               admittance_cutoff, admittance_mass_scale)) {
                 std::cerr << "[3A] Variant D failed.\n";
                 hw.shutdown();
                 return 1;

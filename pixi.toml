@@ -104,6 +104,8 @@ exp-1a     = { cmd = "./build/exp_1a_step_response --log true",     depends-on =
 exp-1b     = { cmd = "./build/exp_1b_smooth_trajectory --log true", depends-on = ["build_release"] }
 exp-2      = { cmd = "./build/exp_2_disturbance --log true",        depends-on = ["build_release"] }
 exp-3a-sim = { cmd = "./build/exp_3a_sim_hw --log true",            depends-on = ["build_release"] }
+# Variant E only (sim, velocity + admittance).  Tuning: --cutoff <rad/s> --mass-scale <s>
+exp-3a-sim-admittance = { cmd = "./build/exp_3a_sim_hw --variants E --log true", depends-on = ["build_release"] }
 exp-3b-sim = { cmd = "./build/exp_3b_obstacle --log true",          depends-on = ["build_release"] }
 
 # Hardware variants — pass the robot IP as the first argument, e.g.:

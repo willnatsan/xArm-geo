@@ -11,6 +11,14 @@
 
 namespace xarm_geo {
 
+    // --- Optimal IK Defaults ---
+
+    namespace optik_defaults {
+        // Threshold on ||v_safe - v_des||_2 above which optik_modified is set.
+        // Sized just above the QP solver's per-element numerical noise floor.
+        inline constexpr double kModifiedTol = 1e-4;
+    }  // namespace optik_defaults
+
     // --- Optimal IK Status & Options ---
 
     // OK       : strict solution, slack delta ≈ 0

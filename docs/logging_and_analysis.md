@@ -144,8 +144,8 @@ are used anywhere.
 | Joint references | `q_ref.0`..`a_ref.{N-1}` | Joint-space phases only; blank in task-space phases |
 | Task actual | `ee_actual.x/y/z`, `ee_actual.qx/qy/qz/qw`, `ee_twist_actual.vx/vy/vz/wx/wy/wz` | Always (identity pose if not filled) |
 | Task target | `ee_target.x/y/z`, `ee_target.qx/qy/qz/qw`, `ee_twist_target.vx/vy/vz/wx/wy/wz` | Always |
-| Torque triplet | `tau_ctrl.i`, `tau_des.i`, `tau_safe.i` | Dynamic (torque-mode) controllers only; blank in kinematic trials |
-| Velocity triplet | `v_ctrl.i`, `v_des.i`, `v_safe.i` | Kinematic (velocity-mode) controllers only; blank in torque-mode trials |
+| Torque triplet | `tau_ctrl.i`, `tau_des.i`, `tau_safe.i` | Dynamic (torque-mode) controllers; also populated by `fill_torque_diagnostics` in admittance-cascade pipelines |
+| Velocity triplet | `v_ctrl.i`, `v_des.i`, `v_safe.i` | Kinematic (velocity-mode) controllers, or any pipeline calling `fill_admittance_diagnostics`; blank in pure torque-mode trials |
 | Controller status | `controller_status`, `asif_status`, `asif_invoked`, `asif_modified`, `optik_status`, `optik_invoked`, `optik_modified` | Always; 255 (0xFF) means "not invoked" for status bytes |
 
 The torque triplet semantics:
@@ -156,12 +156,22 @@ tau_des   -- post bias-compensation; the command without ASIF.
 tau_safe  -- post ASIF certification; == tau_des when ASIF is off.
 ```
 
-The velocity triplet semantics:
+The velocity triplet semantics (kinematic controller path):
 
 ```
 v_ctrl  -- raw hook output, before any safety-layer shaping.
 v_des   -- == v_ctrl (no bias-compensation equivalent for kinematic bases).
 v_safe  -- post OptIK / direction-preserving velocity-limit rescale.
+```
+
+When `fill_admittance_diagnostics` is used (admittance-cascade pipeline), the same
+three columns carry different values:
+
+```
+v_ctrl  -- admittance ODE state (v_state), post Euler-step, pre-feedforward.
+v_des   -- v_state + v_ff (pre-rescale).
+v_safe  -- post velocity-limit rescale; overwritten with the safe_velocity_projection
+           result when the experiment also runs the kinematic safety filter.
 ```
 
 ### Sample Assembly Helpers
@@ -193,6 +203,12 @@ void fill_velocity_diagnostics(LogSample &s,
                                 const KinematicTaskControllerBase &c) noexcept;
 void fill_velocity_diagnostics(LogSample &s,
                                 const KinematicJointControllerBase &c) noexcept;
+
+// Admittance side: fills v_ctrl/des/safe from AdmittanceLayer::last_tick_diagnostics().
+// Use in place of fill_velocity_diagnostics when the velocity command comes from an
+// AdmittanceLayer rather than a kinematic controller base.
+void fill_admittance_diagnostics(LogSample &s,
+                                  const AdmittanceLayer &a) noexcept;
 ```
 
 Typical combination for a kinematic task-space trial:
@@ -215,6 +231,29 @@ xarm_geo::diagnostics::fill_torque_diagnostics(s, pd_controller);
 logger->log(s);
 ```
 
+Typical combination for an admittance-cascade trial (torque controller + AdmittanceLayer
++ safe_velocity_projection):
+
+```cpp
+xarm_geo::diagnostics::LogSample s;
+xarm_geo::diagnostics::fill_task_sample(s, t, tick, state, task_target, data);
+s.controller_status = static_cast<std::uint8_t>(ctrl_status);
+// Torque triplet from the upstream PD controller.
+xarm_geo::diagnostics::fill_torque_diagnostics(s, pd_controller);
+// Velocity triplet from the admittance layer (v_ctrl=v_state, v_des=v_state+v_ff,
+// v_safe=post-rescale).
+xarm_geo::diagnostics::fill_admittance_diagnostics(s, admittance);
+// Optionally overwrite v_safe and optik_* with the safe_velocity_projection result.
+if (proj_status == OptimalIKStatus::OK || proj_status == OptimalIKStatus::RELAXED) {
+    s.v_safe    = v_projected;
+    s.optik_invoked  = true;
+    s.optik_modified = (v_projected - admittance.last_tick_diagnostics().v_safe).norm()
+                       > optik_defaults::kModifiedTol;
+    s.optik_status   = static_cast<std::uint8_t>(proj_status);
+}
+logger->log(s);
+```
+
 ### Trial Naming
 
 `make_trial_name` composes a self-describing filename stem:
@@ -231,10 +270,11 @@ sim_EuclideanPController_FigureEight_ff
 hardware_GeometricPController_TiltingCircle_safe_ff
 ```
 
-The `_safe` tag appears when `constraint_aware` is true, covering ASIF in
-torque-mode trials, OptIK in kinematic task-space trials, and the
-direction-preserving velocity rescale in kinematic joint-space trials. The
-trailing `_ff` / `_noff` reflects the controller's `use_feedforward` flag.
+The `_safe` tag appears when the `constraint` argument to `make_trial_name` is true,
+covering ASIF in torque-mode trials, OptIK in kinematic task-space trials, the
+direction-preserving velocity rescale in kinematic joint-space trials, and
+`safe_velocity_projection` in admittance-cascade trials. The trailing `_ff` / `_noff`
+reflects the controller's `use_feedforward` flag.
 
 Controller and trajectory names come from `kName`:
 
@@ -262,8 +302,8 @@ public:
 An optional `suffix` argument appends a custom tag after `_ff`:
 
 ```cpp
-xarm_geo::diagnostics::make_trial_name("sim", ctrl, traj, true, true, "run2");
-// -> "sim_GeometricPController_PipeInspection_safe_ff_run2"
+xarm_geo::diagnostics::make_trial_name("sim", ctrl, traj, true, true, "admittance");
+// -> "sim_GeometricPDController_TiltingCircle_safe_ff_admittance"
 ```
 
 ### Controller Diagnostics Surface

@@ -77,7 +77,8 @@ namespace xarm_geo {
         diag_.v_safe = data.v_out;
         diag_.optik_invoked = constraint_aware;
         diag_.optik_status = OptimalIKStatus::OK;
-        diag_.optik_modified = constraint_aware && ((diag_.v_safe - diag_.v_des).norm() > 1e-9);
+        diag_.optik_modified = constraint_aware &&
+                               ((diag_.v_safe - diag_.v_des).norm() > optik_defaults::kModifiedTol);
         diag_.optik_delta = 0.0;  // not exposed from the convenience overload path
 
         return ControllerStatus::OK;
@@ -208,7 +209,7 @@ namespace xarm_geo {
             diag_.tau_safe = tau_safe_;
             diag_.asif_invoked = true;
             diag_.asif_status = asif_status;
-            diag_.asif_modified = (tau_safe_ - tau_des_).norm() > 1e-9;
+            diag_.asif_modified = (tau_safe_ - tau_des_).norm() > asif_defaults::kModifiedTol;
             diag_.asif_delta = 0.0;  // not exposed from the convenience overload path
         } else {
             out.tau = tau_des_;
@@ -394,7 +395,7 @@ namespace xarm_geo {
             diag_.tau_safe = tau_safe_;
             diag_.asif_invoked = true;
             diag_.asif_status = asif_status;
-            diag_.asif_modified = (tau_safe_ - tau_des_).norm() > 1e-9;
+            diag_.asif_modified = (tau_safe_ - tau_des_).norm() > asif_defaults::kModifiedTol;
             diag_.asif_delta = 0.0;
         } else {
             out.tau = tau_des_;

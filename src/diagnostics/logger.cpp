@@ -367,4 +367,11 @@ namespace xarm_geo::diagnostics {
         s.optik_status = static_cast<std::uint8_t>(d.optik_status);
     }
 
+    void fill_admittance_diagnostics(LogSample &s, const AdmittanceLayer &a) noexcept {
+        const auto &d = a.last_tick_diagnostics();
+        s.v_ctrl = d.v_state;  // admittance ODE state (pre-feedforward)
+        s.v_des = d.v_des;     // v_state + v_ff (pre-rescale)
+        s.v_safe = d.v_safe;   // post velocity-limit rescale
+    }
+
 }  // namespace xarm_geo::diagnostics

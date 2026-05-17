@@ -7,6 +7,7 @@
 
 #include <Eigen/Dense>
 
+#include <xarm_geo/control/admittance.h>
 #include <xarm_geo/control/controller.h>
 #include <xarm_geo/core/manifold.h>
 #include <xarm_geo/core/motion.h>
@@ -189,5 +190,13 @@ namespace xarm_geo::diagnostics {
     // controller's last-tick snapshot. Call immediately after update().
     void fill_velocity_diagnostics(LogSample &s, const KinematicTaskControllerBase &c) noexcept;
     void fill_velocity_diagnostics(LogSample &s, const KinematicJointControllerBase &c) noexcept;
+
+    // Fills the velocity triplet from an AdmittanceLayer's last-tick snapshot:
+    //   v_ctrl <- v_state  (admittance ODE state, pre-feedforward)
+    //   v_des  <- v_state + v_ff  (pre-rescale)
+    //   v_safe <- post velocity-limit rescale
+    // Does not touch the optik_* fields; fill those separately if safe_velocity_projection
+    // was also called (see exp_3a_sim_hw.cpp for the combined pattern).
+    void fill_admittance_diagnostics(LogSample &s, const AdmittanceLayer &a) noexcept;
 
 }  // namespace xarm_geo::diagnostics

@@ -17,6 +17,7 @@ from xarm_geo_analysis.metrics.tracking import (
     error_twist_norm,
     riemannian_se3_error,
     rotational_geodesic_error,
+    steady_state_rmse,
     translational_error,
 )
 from xarm_geo_analysis.metrics.transient import _BAND_RIEM, _BAND_ROT_RAD, _BAND_TRANS_M
@@ -571,5 +572,362 @@ def plot_error_boxplot(
     )
     ax.set_title("Tracking Error Distribution")
     plt.setp(ax.get_xticklabels(), rotation=20, ha="right", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Top-down XY path overlay (Exp 3A)
+# ---------------------------------------------------------------------------
+
+
+def plot_xy_path_overlay(
+    experiment: Experiment,
+    show_reference: bool = True,
+    figsize: tuple[float, float] = (8, 8),
+) -> Figure:
+    """Top-down (X vs Y) overlay of actual EE paths across trials.
+
+    Useful when the trajectory has a strong planar phase (e.g. the first half
+    of the TiltingCircle). Equal-aspect axes preserve geometric shape.
+
+    Parameters
+    ----------
+    experiment    : Experiment containing the trials to compare.
+    show_reference: if True, plot the target XY path of the first trial as a
+                    dashed reference.
+    figsize       : matplotlib figure size.
+
+    Returns
+    -------
+    matplotlib Figure.
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    trials = list(experiment)
+
+    if show_reference and trials:
+        p_ref = trials[0].p_target()
+        ax.plot(
+            p_ref[:, 0],
+            p_ref[:, 1],
+            color=COLOR_TARGET,
+            linewidth=LW_REFERENCE,
+            linestyle="--",
+            alpha=ALPHA_PATH_MUTED,
+            label="Target",
+        )
+
+    prop_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    for i, trial in enumerate(trials):
+        p = trial.p_actual()
+        ax.plot(
+            p[:, 0],
+            p[:, 1],
+            color=prop_cycle[i % len(prop_cycle)],
+            linewidth=LW_PATH,
+            alpha=ALPHA_PRIMARY,
+            label=trial.name,
+        )
+
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_title("End-Effector Path (Top-Down)")
+    ax.legend()
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Tracking-error overlay (Exp 3A)
+# ---------------------------------------------------------------------------
+
+
+def plot_error_overlay(
+    experiment: Experiment,
+    w_trans: float = 1.0,
+    w_rot: float = 1.0,
+    figsize: tuple[float, float] = (10, 6),
+) -> Figure:
+    """Two-panel overlay of translational and rotational error vs time.
+
+    All trials in the experiment are overlaid on each panel. Reference bands
+    drawn at the standard 5 mm / 1 deg thresholds.
+
+    Parameters
+    ----------
+    experiment    : Experiment containing the trials to compare.
+    w_trans, w_rot: weights forwarded to riemannian_se3_error (unused here but
+                    accepted for signature parity with plot_tracking_errors).
+    figsize       : matplotlib figure size.
+
+    Returns
+    -------
+    matplotlib Figure.
+    """
+    fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
+    prop_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+    for i, trial in enumerate(experiment):
+        color = prop_cycle[i % len(prop_cycle)]
+        t = trial.t()
+        e_trans = translational_error(trial) * 1e3
+        e_rot = np.degrees(rotational_geodesic_error(trial))
+        axes[0].plot(
+            t,
+            e_trans,
+            color=color,
+            linewidth=LW_PRIMARY,
+            alpha=ALPHA_PRIMARY,
+            label=trial.name,
+        )
+        axes[1].plot(
+            t,
+            e_rot,
+            color=color,
+            linewidth=LW_PRIMARY,
+            alpha=ALPHA_PRIMARY,
+            label=trial.name,
+        )
+
+    axes[0].axhline(
+        _BAND_TRANS_M * 1e3,
+        color=COLOR_LIMIT,
+        linestyle="--",
+        linewidth=LW_REFERENCE,
+        label="5 mm Band",
+    )
+    axes[0].set_ylabel("Translational Error (mm)")
+    axes[0].set_title(
+        f"Tracking Error Comparison{TITLE_SEP}{len(list(experiment))} Trials"
+    )
+    axes[0].legend()
+
+    axes[1].axhline(
+        math.degrees(_BAND_ROT_RAD),
+        color=COLOR_LIMIT,
+        linestyle="--",
+        linewidth=LW_REFERENCE,
+        label="1° Band",
+    )
+    axes[1].set_ylabel("Rotational Error (deg)")
+    axes[1].set_xlabel("Time (s)")
+    axes[1].legend()
+
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Steady-state RMSE grouped bar chart (Exp 3A)
+# ---------------------------------------------------------------------------
+
+
+def _parse_3a_trial_name(name: str) -> tuple[str, str, str]:
+    """Extract (domain, controller_short, suffix) from a 3A trial filename stem.
+
+    Domain is "sim" or "hardware".  Controller is one of {"P-Vel", "PD-Torque",
+    "PD+Adm"} based on the controller class and admittance suffix.  Suffix is
+    "" or "_admittance".
+    """
+    domain = (
+        "sim"
+        if name.startswith("sim_")
+        else ("hardware" if name.startswith("hardware_") else "other")
+    )
+    has_admittance = name.endswith("_admittance")
+    if "GeometricPDController" in name:
+        ctrl = "PD+Adm" if has_admittance else "PD-Torque"
+    elif "GeometricPController" in name:
+        ctrl = "P-Vel"
+    else:
+        ctrl = name
+    suffix = "_admittance" if has_admittance else ""
+    return domain, ctrl, suffix
+
+
+def plot_rmse_grouped_bars(
+    experiment: Experiment,
+    use_steady_state: bool = True,
+    figsize: tuple[float, float] = (10, 5),
+) -> Figure:
+    """Grouped bar chart of translational / rotational RMSE.
+
+    X-axis groups bars by controller category ("P-Vel", "PD-Torque",
+    "PD+Adm").  Within each group, bars are coloured by domain (sim vs hw).
+    Numeric value labelled above each bar.
+
+    Parameters
+    ----------
+    experiment       : Experiment to summarise.
+    use_steady_state : if True, use steady_state_rmse (last 20% of trial);
+                       else, full-trial RMSE.
+    figsize          : matplotlib figure size.
+
+    Returns
+    -------
+    matplotlib Figure.
+    """
+    # Bin trials by (controller, domain).
+    categories = ["P-Vel", "PD-Torque", "PD+Adm"]
+    domains = ["sim", "hardware"]
+    domain_label = {"sim": "Sim", "hardware": "Hardware"}
+    domain_color = {"sim": COLOR_TRANS, "hardware": COLOR_ROT}
+
+    # values[(ctrl, domain)] = (trans_rmse_mm, rot_rmse_deg) or None.
+    values: dict[tuple[str, str], tuple[float, float] | None] = {}
+    for c in categories:
+        for d in domains:
+            values[(c, d)] = None
+
+    for trial in experiment:
+        d, c, _ = _parse_3a_trial_name(trial.name)
+        if c not in categories or d not in domains:
+            continue
+        if use_steady_state:
+            trans = steady_state_rmse(trial, kind="translational") * 1e3
+            rot = math.degrees(steady_state_rmse(trial, kind="rotational"))
+        else:
+            from xarm_geo_analysis.metrics.tracking import (
+                translational_rmse,
+                rotational_rmse,
+            )
+
+            trans = translational_rmse(trial) * 1e3
+            rot = math.degrees(rotational_rmse(trial))
+        values[(c, d)] = (trans, rot)
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    x = np.arange(len(categories))
+    width = 0.35
+
+    for panel, (ax, kind_idx, ylabel, band) in enumerate(
+        [
+            (axes[0], 0, "Translational RMSE (mm)", _BAND_TRANS_M * 1e3),
+            (axes[1], 1, "Rotational RMSE (deg)", math.degrees(_BAND_ROT_RAD)),
+        ]
+    ):
+        for di, d in enumerate(domains):
+            heights = []
+            for c in categories:
+                v = values[(c, d)]
+                heights.append(v[kind_idx] if v is not None else 0.0)
+            bars = ax.bar(
+                x + (di - 0.5) * width,
+                heights,
+                width,
+                color=domain_color[d],
+                alpha=ALPHA_PRIMARY,
+                label=domain_label[d],
+                edgecolor="0.3",
+                linewidth=0.5,
+            )
+            # Annotate non-zero bars; skip n/a slots (height == 0 and no value).
+            for bar, c in zip(bars, categories):
+                v = values[(c, d)]
+                if v is None:
+                    # mark as n/a
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        0.0,
+                        "n/a",
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                        color="0.5",
+                    )
+                    continue
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height(),
+                    f"{bar.get_height():.2f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
+        ax.axhline(
+            band,
+            color=COLOR_LIMIT,
+            linestyle="--",
+            linewidth=LW_REFERENCE,
+            alpha=0.7,
+            label=f"{band:.0f} {'mm' if panel == 0 else 'deg'} band",
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(categories)
+        ax.set_ylabel(ylabel)
+        ax.legend(loc="upper left", fontsize=8)
+
+    title_kind = "Steady-State " if use_steady_state else ""
+    fig.suptitle(f"{title_kind}RMSE by Controller and Domain", y=1.02)
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Single-axis time-series overlay (Exp 3A)
+# ---------------------------------------------------------------------------
+
+
+def plot_axis_overlay(
+    experiment: Experiment,
+    axis: str = "z",
+    show_reference: bool = True,
+    figsize: tuple[float, float] = (10, 4),
+) -> Figure:
+    """Overlay of actual EE position along one Cartesian axis vs time.
+
+    Multi-trial counterpart to plot_axis_zoom.  Z is the most informative
+    axis for the TiltingCircle trajectory (Z range is quiescent in the
+    horizontal half and fully active in the tilted half).
+
+    Parameters
+    ----------
+    experiment    : Experiment to overlay.
+    axis          : "x", "y", or "z".
+    show_reference: if True, plot the target trace of the first trial dashed.
+    figsize       : matplotlib figure size.
+
+    Returns
+    -------
+    matplotlib Figure.
+    """
+    ax_idx = {"x": 0, "y": 1, "z": 2}
+    if axis not in ax_idx:
+        raise ValueError(f"Unknown axis '{axis}'; expected x|y|z")
+    idx = ax_idx[axis]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    trials = list(experiment)
+
+    if show_reference and trials:
+        t_ref = trials[0].t()
+        target = trials[0].p_target()[:, idx] * 1e3
+        ax.plot(
+            t_ref,
+            target,
+            color=COLOR_TARGET,
+            linewidth=LW_REFERENCE,
+            linestyle="--",
+            alpha=ALPHA_PATH_MUTED,
+            label="Target",
+        )
+
+    prop_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    for i, trial in enumerate(trials):
+        ax.plot(
+            trial.t(),
+            trial.p_actual()[:, idx] * 1e3,
+            color=prop_cycle[i % len(prop_cycle)],
+            linewidth=LW_PRIMARY,
+            alpha=ALPHA_PRIMARY,
+            label=trial.name,
+        )
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel(f"{axis.upper()} position (mm)")
+    ax.set_title(f"{axis.upper()}-Axis Position Comparison")
+    ax.legend()
     fig.tight_layout()
     return fig

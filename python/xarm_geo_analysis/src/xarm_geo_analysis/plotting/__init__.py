@@ -2,11 +2,15 @@ from xarm_geo_analysis.plotting.style import apply_style
 from xarm_geo_analysis.plotting.tracking import (
     plot_3d_path,
     plot_3d_paths_compare,
-    plot_tracking_errors,
-    plot_settling,
-    plot_error_twist_overlay,
+    plot_axis_overlay,
     plot_axis_zoom,
     plot_error_boxplot,
+    plot_error_overlay,
+    plot_error_twist_overlay,
+    plot_rmse_grouped_bars,
+    plot_settling,
+    plot_tracking_errors,
+    plot_xy_path_overlay,
 )
 from xarm_geo_analysis.plotting.torque import plot_torque_triplet, plot_velocity_triplet
 from xarm_geo_analysis.plotting.compare import overlay
@@ -35,9 +39,13 @@ __all__ = [
     # multi-trial / experiment
     "overlay",
     "plot_3d_paths_compare",
+    "plot_axis_overlay",
+    "plot_error_overlay",
     "plot_error_twist_overlay",
     "plot_error_boxplot",
+    "plot_rmse_grouped_bars",
     "plot_tracking_with_disturbance",
     "plot_obstacle_distance",
     "plot_command_norm_overlay",
+    "plot_xy_path_overlay",
 ]

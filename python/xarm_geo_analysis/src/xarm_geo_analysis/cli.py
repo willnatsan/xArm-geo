@@ -15,7 +15,8 @@ Experiment-specific plot sets (``plot exp <id> <dir>``)
   1b   geodesic error overlay + control-effort overlay
   2    tracking-error-with-disturbance overlay + PID integrator state
        (one integrator plot per CSV that has e_I data)
-  3a   error distribution box plot + per-axis position zoom (X axis)
+  3a   XY-path overlay (sim/hw) + error overlay (sim/hw) + steady-state RMSE
+       grouped bars + Z-axis overlay (sim/hw)
   3b   3-D path with obstacle + obstacle distance + intervention norms
 
 Saving plots
@@ -243,14 +244,16 @@ def cmd_plot_exp(args: argparse.Namespace) -> None:
     """Generate the experiment-specific figure set for a results directory."""
     from xarm_geo_analysis.plotting import (
         plot_3d_paths_compare,
+        plot_axis_overlay,
         plot_command_norm_overlay,
-        plot_error_boxplot,
+        plot_error_overlay,
         plot_error_twist_overlay,
         plot_integrator_state,
         plot_intervention_norm,
         plot_obstacle_distance,
+        plot_rmse_grouped_bars,
         plot_tracking_with_disturbance,
-        plot_axis_zoom,
+        plot_xy_path_overlay,
     )
     from xarm_geo_analysis.plotting.compare import overlay
     from xarm_geo_analysis.metrics.tracking import rotational_geodesic_error
@@ -341,17 +344,38 @@ def cmd_plot_exp(args: argparse.Namespace) -> None:
                 )
 
     elif exp_id == "3a":
-        # Error distribution box plot
-        figures.append(
-            (plot_error_boxplot(exp, kind="translational"), "exp_3a_boxplot_trans")
-        )
-        figures.append(
-            (plot_error_boxplot(exp, kind="rotational"), "exp_3a_boxplot_rot")
-        )
-        # Per-axis zoom (X axis) for first two trials (sim kin + hw admittance)
-        for trial in list(exp)[:4]:
-            stem = trial.name.replace("/", "_")
-            figures.append((plot_axis_zoom(trial, axis="x"), f"exp_3a_axis_x_{stem}"))
+        # Split trials into sim / hardware sub-experiments for the two
+        # comparison narratives:
+        #   N1: velocity vs torque (sim only)        -> A, B, E
+        #   N2: hardware effect + admittance layer   -> C, D
+        sim_trials = [t for t in exp if t.name.startswith("sim_")]
+        hw_trials = [t for t in exp if t.name.startswith("hardware_")]
+        exp_sim = Experiment(sim_trials) if sim_trials else None
+        exp_hw = Experiment(hw_trials) if hw_trials else None
+
+        # Top-down XY path overlay (Z is mostly constant in the planar phase;
+        # XY shows in-plane tracking quality).
+        if exp_sim is not None:
+            figures.append((plot_xy_path_overlay(exp_sim), "exp_3a_xy_path_sim"))
+        if exp_hw is not None:
+            figures.append((plot_xy_path_overlay(exp_hw), "exp_3a_xy_path_hw"))
+
+        # Translational + rotational error overlay (2-panel).
+        if exp_sim is not None:
+            figures.append((plot_error_overlay(exp_sim), "exp_3a_error_overlay_sim"))
+        if exp_hw is not None:
+            figures.append((plot_error_overlay(exp_hw), "exp_3a_error_overlay_hw"))
+
+        # Headline numerical comparison: steady-state RMSE, grouped by
+        # controller category and coloured by domain.
+        figures.append((plot_rmse_grouped_bars(exp), "exp_3a_rmse_bars"))
+
+        # Z-axis time series: most informative axis for TiltingCircle
+        # (quiescent in horizontal half, fully active in tilted half).
+        if exp_sim is not None:
+            figures.append((plot_axis_overlay(exp_sim, axis="z"), "exp_3a_z_axis_sim"))
+        if exp_hw is not None:
+            figures.append((plot_axis_overlay(exp_hw, axis="z"), "exp_3a_z_axis_hw"))
 
     elif exp_id == "3b":
         # 3-D path with obstacle

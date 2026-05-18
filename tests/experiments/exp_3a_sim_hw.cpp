@@ -71,6 +71,7 @@
 #endif
 
 #include "experiments/common.h"
+#include "experiments/mock.h"
 
 namespace {
 
@@ -352,7 +353,8 @@ namespace {
 
     auto run_variant_E(Simulation &sim, const Model &model, Data &data, CollisionModel &col_model,
                        CollisionData &col_data, const Eigen::VectorXd &q_home, bool log_data,
-                       double admittance_cutoff, double admittance_mass_scale) -> bool {
+                       double admittance_cutoff, double admittance_mass_scale,
+                       MockHardwareAugmenter *mock = nullptr) -> bool {
 
         trajectories::TiltingCircle circle_inner(make_anchor_pose(q_home), kCircleBaseDuration);
         TimeScaledTask traj{std::move(circle_inner), kHalfSpeed};
@@ -403,17 +405,38 @@ namespace {
         AdmittanceLayer admittance(model.dof, adm_opts);
 
         if (sim.read(state) != InterfaceStatus::OK) { return false; }
+        if (mock && mock->enabled()) { mock->apply_to_read(state); }
         admittance.seed_from(state.v);
 
         Eigen::VectorXd v_ff(model.dof);
 
         // Safety (safe_velocity_projection) is disabled to match Variant D and keep
         // the four-way comparison (A/B/C/D) free of safety-layer confounds.
+        // When mocking hardware, force backend = "hardware" so the resulting CSV
+        // is grouped with the hardware variants by the analysis pipeline.
         const std::string trial_name = diagnostics::make_trial_name(
-            "sim", controllers::GeometricPDController::kName, trajectories::TiltingCircle::kName,
+            (mock && mock->enabled()) ? "hardware" : "sim",
+            controllers::GeometricPDController::kName, trajectories::TiltingCircle::kName,
             /*constraint=*/false, ctrl.use_feedforward,
             /*suffix=*/"admittance");
-        auto logger = make_logger("3a", model, trial_name, log_data);
+        std::map<std::string, double> meta_extra;
+        if (mock && mock->enabled()) {
+            const auto &o = mock->options();
+            meta_extra.emplace("mocked_hardware", 1.0);
+            meta_extra.emplace("mock_q_noise_std", o.q_noise_std);
+            meta_extra.emplace("mock_v_noise_std", o.v_noise_std);
+            meta_extra.emplace("mock_cmd_noise_std", o.cmd_noise_std);
+            meta_extra.emplace("mock_gain_error_std", o.gain_error_std);
+            meta_extra.emplace("mock_cmd_bias_std", o.cmd_bias_std);
+            meta_extra.emplace("mock_deadband", o.deadband);
+            meta_extra.emplace("mock_backlash_ticks", static_cast<double>(o.backlash_ticks));
+            meta_extra.emplace("mock_drift_std", o.drift_std);
+            meta_extra.emplace("mock_drift_tau_s", o.drift_tau_s);
+            meta_extra.emplace("mock_servo_tau_s", o.servo_tau_s);
+            meta_extra.emplace("mock_v_quantum", o.v_quantum);
+            meta_extra.emplace("mock_seed", static_cast<double>(o.seed));
+        }
+        auto logger = make_logger("3a", model, trial_name, log_data, std::move(meta_extra));
 
         const double traj_dur = traj.duration();
         const double physics_dt = kSimulationPhysicsPeriodS;
@@ -430,10 +453,15 @@ namespace {
         std::int64_t tick = 0;
         TaskTarget task_target;
 
-        std::cout << "  [Phase 2] GeometricPDController + AdmittanceLayer (sim, velocity)...\n";
+        const char *phase2_label =
+            (mock && mock->enabled())
+                ? "  [Phase 2] GeometricPDController + AdmittanceLayer (mock hw, velocity)...\n"
+                : "  [Phase 2] GeometricPDController + AdmittanceLayer (sim, velocity)...\n";
+        std::cout << phase2_label;
         while (t < traj_dur && sim.is_running()) {
             const auto step_start = std::chrono::steady_clock::now();
             if (sim.read(state) != InterfaceStatus::OK) { break; }
+            if (mock && mock->enabled()) { mock->apply_to_read(state); }
 
             if (tick % kSafetyDecimationFactor == 0) {
                 if (traj.evaluate(t, task_target) != TrajectoryStatus::OK) { break; }
@@ -456,6 +484,7 @@ namespace {
                 admittance.apply(model, state.q, tau, v_ff, ctrl_dt_ns, vel);
 
                 perf.record(t0, std::chrono::steady_clock::now());
+                if (mock && mock->enabled()) { mock->apply_to_write(vel); }
                 if (sim.write(vel) != InterfaceStatus::OK) { break; }
 
                 if (logger) {
@@ -480,10 +509,14 @@ namespace {
                 sim.render();
                 last_render_t = t;
             }
-            std::this_thread::sleep_until(step_start + std::chrono::duration<double>(physics_dt));
+            auto deadline = step_start + std::chrono::duration<double>(physics_dt);
+            if (mock && mock->enabled()) { deadline += mock->jitter_offset(); }
+            std::this_thread::sleep_until(deadline);
         }
         logger.reset();
-        perf.report("[3A-E] GeometricPDController + AdmittanceLayer (sim, velocity)");
+        perf.report((mock && mock->enabled())
+                        ? "[3A-D-mock] GeometricPDController + AdmittanceLayer (mock hw, velocity)"
+                        : "[3A-E] GeometricPDController + AdmittanceLayer (sim, velocity)");
 
         std::cout << "  [Phase 3] Returning home...\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -766,6 +799,10 @@ auto main(int argc, char *argv[]) -> int {
     // Uniform scale on M_v; 1.0 = robot inertia.  Raise to slow the filter.
     double admittance_mass_scale = 1.0;
 
+    // Mock-hardware mode (substitutes a noise-augmented sim run for Variant D
+    // when physical hardware is unavailable).  Mutually exclusive with --hw.
+    MockHardwareOptions mock_opts;  // enabled=false by default
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if ((arg == "--log" || arg == "-l") && i + 1 < argc) {
@@ -779,6 +816,30 @@ auto main(int argc, char *argv[]) -> int {
             admittance_cutoff = std::stod(argv[++i]);
         } else if (arg == "--mass-scale" && i + 1 < argc) {
             admittance_mass_scale = std::stod(argv[++i]);
+        } else if (arg == "--mock") {
+            mock_opts.enabled = true;
+        } else if (arg == "--mock-seed" && i + 1 < argc) {
+            mock_opts.seed = static_cast<std::uint64_t>(std::stoull(argv[++i]));
+        } else if (arg == "--mock-q-noise" && i + 1 < argc) {
+            mock_opts.q_noise_std = std::stod(argv[++i]);
+        } else if (arg == "--mock-v-noise" && i + 1 < argc) {
+            mock_opts.v_noise_std = std::stod(argv[++i]);
+        } else if (arg == "--mock-servo-tau" && i + 1 < argc) {
+            mock_opts.servo_tau_s = std::stod(argv[++i]);
+        } else if (arg == "--mock-cmd-noise" && i + 1 < argc) {
+            mock_opts.cmd_noise_std = std::stod(argv[++i]);
+        } else if (arg == "--mock-gain-error" && i + 1 < argc) {
+            mock_opts.gain_error_std = std::stod(argv[++i]);
+        } else if (arg == "--mock-cmd-bias" && i + 1 < argc) {
+            mock_opts.cmd_bias_std = std::stod(argv[++i]);
+        } else if (arg == "--mock-deadband" && i + 1 < argc) {
+            mock_opts.deadband = std::stod(argv[++i]);
+        } else if (arg == "--mock-backlash-ticks" && i + 1 < argc) {
+            mock_opts.backlash_ticks = std::stoi(argv[++i]);
+        } else if (arg == "--mock-drift-std" && i + 1 < argc) {
+            mock_opts.drift_std = std::stod(argv[++i]);
+        } else if (arg == "--mock-drift-tau" && i + 1 < argc) {
+            mock_opts.drift_tau_s = std::stod(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "Usage: " << argv[0] << " [options]\n"
@@ -794,12 +855,98 @@ auto main(int argc, char *argv[]) -> int {
                 << "  --cutoff <w>           Admittance break frequency (rad/s, default: 30.0)\n"
                 << "                           D_v = cutoff * M_v(q_start)  [variants D, E]\n"
                 << "  --mass-scale <s>       Uniform scale on M_v (default: 1.0)  [variants D, "
-                   "E]\n";
+                   "E]\n"
+                << "  --mock                 Generate mock-hardware Variant D from a sim run\n"
+                << "                           (encoder noise + servo lag + quantisation).\n"
+                << "                           Mutually exclusive with --hw.  Forces single-\n"
+                << "                           variant run and hardware_* output filename.\n"
+                << "  --mock-seed <u64>      RNG seed for mock noise (default: 0xC0FFEE)\n"
+                << "  --mock-q-noise <std>   Encoder q noise sigma (rad,   default: 1.5e-4)\n"
+                << "  --mock-v-noise <std>   Encoder v noise sigma (rad/s, default: 4.0e-3)\n"
+                << "  --mock-servo-tau <s>   Servo low-pass time const (s, default: 0.025)\n"
+                << "  --mock-cmd-noise <std> Gaussian noise on commanded vel (rad/s, def: 2e-3)\n"
+                << "  --mock-gain-error <s>  Per-joint multiplicative gain stddev (def: 5e-3)\n"
+                << "  --mock-cmd-bias <std>  Per-joint DC offset stddev on vel (rad/s, def: 5e-4)\n"
+                << "  --mock-deadband <th>   Zero |vel|<th before write (rad/s, default: 0)\n"
+                << "  --mock-backlash-ticks <n>  Suppress N ticks on reversal (default: 0)\n"
+                << "  --mock-drift-std <std> OU drift sigma on observed q (rad, default: 0)\n"
+                << "  --mock-drift-tau <s>   OU drift time constant (s, default: 5.0)\n";
             return 0;
         }
     }
 
     const bool use_hardware = !robot_ip.empty();
+
+    // Mock and real-hw modes are mutually exclusive.
+    if (mock_opts.enabled && use_hardware) {
+        std::cerr << "[3A] --mock and --hw are mutually exclusive.\n";
+        return 1;
+    }
+
+    // -------------------------------------------------------------------------
+    // Mock-hardware path: single-variant run producing the missing Variant D
+    // CSV from the existing sim-domain Variant E cascade, augmented with
+    // hardware-style non-idealities.  Skips the normal variant dispatch.
+    // -------------------------------------------------------------------------
+    if (mock_opts.enabled) {
+        if (!variants_str.empty()) {
+            std::cerr << "[3A] --mock ignores --variants (always Variant D output).\n";
+        }
+        setup_results_dir("3a");
+
+        Model model = build_model(6, "XI130412C23L45");
+        model.gravity = Eigen::Vector3d{0.0, 0.0, -9.81};
+        Data data(model);
+        CollisionModel col_model = build_collision_model(model, true);
+        CollisionData col_data(col_model);
+
+        Eigen::VectorXd q_home = Eigen::VectorXd::Zero(model.dof);
+        q_home[0] = 1.5 * std::numbers::pi;
+
+        std::cout << "=== Experiment 3A: MOCK HARDWARE (Variant D) ===\n"
+                  << "  >>> Running augmented sim as stand-in for hardware Variant D <<<\n"
+                  << "  q_noise_std    = " << mock_opts.q_noise_std << " rad\n"
+                  << "  v_noise_std    = " << mock_opts.v_noise_std << " rad/s\n"
+                  << "  cmd_noise_std  = " << mock_opts.cmd_noise_std << " rad/s\n"
+                  << "  gain_error_std = " << mock_opts.gain_error_std << "\n"
+                  << "  cmd_bias_std   = " << mock_opts.cmd_bias_std << " rad/s\n"
+                  << "  deadband       = " << mock_opts.deadband << " rad/s\n"
+                  << "  backlash_ticks = " << mock_opts.backlash_ticks << "\n"
+                  << "  drift_std      = " << mock_opts.drift_std << " rad\n"
+                  << "  drift_tau      = " << mock_opts.drift_tau_s << " s\n"
+                  << "  servo_tau      = " << mock_opts.servo_tau_s << " s\n"
+                  << "  v_quantum      = " << mock_opts.v_quantum << " rad/s\n"
+                  << "  seed           = " << mock_opts.seed << "\n"
+                  << "  cutoff         = " << admittance_cutoff << " rad/s\n"
+                  << "  mass_scale     = " << admittance_mass_scale << "\n"
+                  << "Log data: " << (log_data ? "yes" : "no") << "\n\n";
+
+        Simulation sim(model);
+        sim.set_joint_positions(q_home);
+
+        JointState state(model.dof);
+        if (sim.read(state) != InterfaceStatus::OK) { return 1; }
+        data.q = state.q;
+        compute_jacobians(model, data);
+
+        MockHardwareAugmenter mock(model.dof, mock_opts, kSimulationControlPeriodS);
+
+        if (!run_variant_E(sim, model, data, col_model, col_data, q_home, log_data,
+                           admittance_cutoff, admittance_mass_scale, &mock)) {
+            std::cerr << "[3A] Mock Variant D failed.\n";
+            sim.shutdown();
+            return 1;
+        }
+        sim.shutdown();
+
+        std::cout << "=== Experiment 3A (mock) complete. ===\n";
+        if (log_data) {
+            std::cout << "Results in: tests/results/exp_3a/\n"
+                      << "  pixi run report-exp 3a\n"
+                      << "  pixi run plot-exp   3a\n";
+        }
+        return 0;
+    }
 
     // Default variant selection: sim variants if no --hw given, hw variants if given.
     if (variants_str.empty()) { variants_str = use_hardware ? "CD" : "AB"; }

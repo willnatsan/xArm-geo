@@ -60,7 +60,7 @@ pixi install
 pixi run build_release
 ```
 
-> **Debug build:** `pixi run build` builds in Debug mode with additional checks. Use `build_release` when running experiments, as the control loops are timing-sensitive.
+> **Debug Build:** `pixi run build` builds in Debug mode with additional checks. Use `build_release` when running experiments, as the control loops are timing-sensitive.
 
 ## Running the Experiments
 

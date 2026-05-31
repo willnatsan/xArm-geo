@@ -31,11 +31,20 @@ docs/                    Usage Guides
 paper/figures/           Generated Publication Plots (PDF Output)
 ```
 
+## Documentation
+
+Guides for using and extending the library:
+
+- [`docs/authoring_controllers.md`](docs/authoring_controllers.md) — writing custom controllers
+- [`docs/authoring_trajectories.md`](docs/authoring_trajectories.md) — writing custom trajectories
+- [`docs/logging_and_analysis.md`](docs/logging_and_analysis.md) — logging trials and computing metrics
+- [`docs/admittance_and_safety.md`](docs/admittance_and_safety.md) — admittance layer and safety filter composition
+
 ## Prerequisites
 
 - **[Pixi](https://pixi.sh)** — manages all C++ and Python dependencies (Eigen, MuJoCo, ProxSuite, coal, matplotlib, pandas, …) via conda-forge. No other package manager is needed.
 - **Git** — required for dependencies fetched at build time (`smooth` Lie-group library, xArm C++ SDK).
-- **Linux x86-64** — the only supported platform (`linux-64`).
+- **Linux x86-64** — the only currently supported platform (`linux-64`).
 
 ## Installation & Build
 
@@ -116,12 +125,3 @@ To run all hooks against the entire repository on demand:
 ```bash
 pixi run -e lint lint
 ```
-
-## Documentation
-
-Guides for using and extending the library:
-
-- [`docs/authoring_controllers.md`](docs/authoring_controllers.md) — writing custom controllers
-- [`docs/authoring_trajectories.md`](docs/authoring_trajectories.md) — writing custom trajectories
-- [`docs/logging_and_analysis.md`](docs/logging_and_analysis.md) — logging trials and computing metrics
-- [`docs/admittance_and_safety.md`](docs/admittance_and_safety.md) — admittance layer and safety filter composition
